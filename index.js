@@ -63,29 +63,74 @@ pool.query(`
 `).then(() => console.log("✅ Tabla 'pedidos' lista"))
   .catch(err => console.error("❌ Error creando tabla pedidos:", err));
 
-// ✅ Actualizar tabla usuarios para incluir datos residenciales (Torres 1,2,3,4)
+// ✅ Actualizar tabla usuarios para incluir datos residenciales (Torres 1,2,3,4,5) - ⚡ ACTUALIZADO
 pool.query(`
   ALTER TABLE usuarios 
-  ADD COLUMN IF NOT EXISTS torre VARCHAR(1) CHECK (torre IN ('1', '2', '3', '4')),
+  ADD COLUMN IF NOT EXISTS torre VARCHAR(1),
   ADD COLUMN IF NOT EXISTS piso INTEGER CHECK (piso >= 1 AND piso <= 30),
   ADD COLUMN IF NOT EXISTS apartamento VARCHAR(10),
   ADD COLUMN IF NOT EXISTS telefono_alternativo VARCHAR(20),
   ADD COLUMN IF NOT EXISTS notas_entrega TEXT
-`).then(() => console.log("✅ Tabla usuarios actualizada para conjunto residencial (Torres 1-4)"))
-  .catch(err => console.log("ℹ️ Columnas ya existen o error:", err.message));
+`).then(async () => {
+  // ⚡ ACTUALIZAR: Constraint de torres para incluir Torre 5
+  try {
+    await pool.query(`
+      ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_torre_check;
+      ALTER TABLE usuarios ADD CONSTRAINT usuarios_torre_check 
+      CHECK (torre IN ('1', '2', '3', '4', '5'));
+    `);
+    console.log("✅ Tabla usuarios actualizada para conjunto residencial (Torres 1-5)");
+  } catch (err) {
+    console.log("ℹ️ Constraint torre ya existe o error:", err.message);
+  }
+}).catch(err => console.log("ℹ️ Columnas ya existen o error:", err.message));
 
-// ✅ Actualizar tabla pedidos para entrega residencial (Torres 1,2,3,4)
+// ✅ Actualizar tabla pedidos para entrega residencial (Torres 1,2,3,4,5) - ⚡ ACTUALIZADO
 pool.query(`
   ALTER TABLE pedidos 
-  ADD COLUMN IF NOT EXISTS torre_entrega VARCHAR(1) CHECK (torre_entrega IN ('1', '2', '3', '4')),
+  ADD COLUMN IF NOT EXISTS torre_entrega VARCHAR(1),
   ADD COLUMN IF NOT EXISTS piso_entrega INTEGER CHECK (piso_entrega >= 1 AND piso_entrega <= 30),
   ADD COLUMN IF NOT EXISTS apartamento_entrega VARCHAR(10),
   ADD COLUMN IF NOT EXISTS instrucciones_entrega TEXT,
   ADD COLUMN IF NOT EXISTS horario_preferido VARCHAR(50),
   ADD COLUMN IF NOT EXISTS entregado_por VARCHAR(100),
   ADD COLUMN IF NOT EXISTS fecha_entrega TIMESTAMP
-`).then(() => console.log("✅ Tabla pedidos actualizada para entrega residencial (Torres 1-4)"))
-  .catch(err => console.log("ℹ️ Columnas ya existen o error:", err.message));
+`).then(async () => {
+  // ⚡ ACTUALIZAR: Constraint de torres para incluir Torre 5
+  try {
+    await pool.query(`
+      ALTER TABLE pedidos DROP CONSTRAINT IF EXISTS pedidos_torre_entrega_check;
+      ALTER TABLE pedidos ADD CONSTRAINT pedidos_torre_entrega_check 
+      CHECK (torre_entrega IN ('1', '2', '3', '4', '5'));
+    `);
+    console.log("✅ Tabla pedidos actualizada para entrega residencial (Torres 1-5)");
+  } catch (err) {
+    console.log("ℹ️ Constraint torre_entrega ya existe o error:", err.message);
+  }
+}).catch(err => console.log("ℹ️ Columnas ya existen o error:", err.message));
+
+// ⚡ AGREGADO: Función de validación para datos residenciales
+function validarDatosResidenciales(torre, piso, apartamento) {
+  const errores = [];
+
+  // Validar torre (ahora incluye Torre 5)
+  if (!['1', '2', '3', '4', '5'].includes(String(torre))) {
+    errores.push('Torre debe ser 1, 2, 3, 4 o 5');
+  }
+
+  // Validar piso
+  const pisoNum = parseInt(piso);
+  if (!piso || pisoNum < 1 || pisoNum > 30) {
+    errores.push('El piso debe estar entre 1 y 30');
+  }
+
+  // Validar apartamento
+  if (!apartamento || apartamento.length === 0) {
+    errores.push('El apartamento es obligatorio');
+  }
+
+  return errores;
+}
 
 // 🛡️ Middleware de autenticación
 const authenticateToken = (req, res, next) => {
@@ -117,7 +162,7 @@ const requireAdmin = (req, res, next) => {
 // 🔐 RUTAS DE AUTENTICACIÓN
 // ===================
 
-// 📝 Registro de usuario con datos residenciales
+// 📝 Registro de usuario con datos residenciales - ⚡ ACTUALIZADO
 app.post('/auth/register', async (req, res) => {
   const { 
     nombre, 
@@ -132,6 +177,21 @@ app.post('/auth/register', async (req, res) => {
   } = req.body;
 
   try {
+    // ⚡ AGREGADO: Validar datos residenciales
+    const erroresValidacion = validarDatosResidenciales(torre, piso, apartamento);
+    if (erroresValidacion.length > 0) {
+      return res.status(400).json({ error: erroresValidacion.join(', ') });
+    }
+
+    // Validaciones básicas
+    if (!nombre || !email || !password || !telefono) {
+      return res.status(400).json({ error: 'Todos los campos obligatorios deben estar completos' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+    }
+
     // Verificar si el usuario ya existe
     const userExists = await pool.query('SELECT id FROM usuarios WHERE email = $1', [email]);
     if (userExists.rows.length > 0) {
@@ -346,7 +406,7 @@ app.put('/productos/:id', authenticateToken, requireAdmin, async (req, res) => {
 // 🛍️ RUTAS DE PEDIDOS
 // ===================
 
-// 🛍️ Crear pedido con datos de entrega residencial
+// 🛍️ Crear pedido con datos de entrega residencial - ⚡ ACTUALIZADO
 app.post('/orders', authenticateToken, async (req, res) => {
   const { 
     productos, 
@@ -355,15 +415,30 @@ app.post('/orders', authenticateToken, async (req, res) => {
     piso_entrega, 
     apartamento_entrega,
     instrucciones_entrega,
-    horario_preferido,
     telefono_contacto
+    // ⚡ ELIMINADO: horario_preferido ya no se recibe del frontend
   } = req.body;
 
   try {
+    // ⚡ AGREGADO: Validar datos de entrega
+    const erroresValidacion = validarDatosResidenciales(torre_entrega, piso_entrega, apartamento_entrega);
+    if (erroresValidacion.length > 0) {
+      return res.status(400).json({ error: `Datos de entrega: ${erroresValidacion.join(', ')}` });
+    }
+
+    // Validaciones básicas
+    if (!productos || productos.length === 0) {
+      return res.status(400).json({ error: 'El pedido debe tener al menos un producto' });
+    }
+
+    if (!telefono_contacto) {
+      return res.status(400).json({ error: 'El teléfono de contacto es obligatorio' });
+    }
+
     const totalInt = Math.round(Number(total));
 
-    if (isNaN(totalInt)) {
-      console.error('🚫 totalPedido es NaN:', total);
+    if (isNaN(totalInt) || totalInt <= 0) {
+      console.error('🚫 totalPedido inválido:', total);
       return res.status(400).json({ error: 'Total no válido' });
     }
 
@@ -371,8 +446,8 @@ app.post('/orders', authenticateToken, async (req, res) => {
       `INSERT INTO pedidos (
         usuario_id, productos, total, 
         torre_entrega, piso_entrega, apartamento_entrega,
-        instrucciones_entrega, horario_preferido, telefono_contacto
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+        instrucciones_entrega, telefono_contacto
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
       [
         req.user.userId, 
         JSON.stringify(productos), 
@@ -381,16 +456,17 @@ app.post('/orders', authenticateToken, async (req, res) => {
         piso_entrega, 
         apartamento_entrega,
         instrucciones_entrega,
-        horario_preferido,
         telefono_contacto
+        // ⚡ ELIMINADO: horario_preferido del INSERT
       ]
     );
 
     res.json({ 
       success: true, 
-      message: 'Pedido creado exitosamente',
+      message: 'Pedido creado exitosamente - Entrega en máximo 20 minutos',
       pedidoId: result.rows[0].id,
-      entrega: `Torre ${torre_entrega}, Piso ${piso_entrega}, Apt ${apartamento_entrega}`
+      entrega: `Torre ${torre_entrega}, Piso ${piso_entrega}, Apt ${apartamento_entrega}`,
+      tiempoEstimado: '20 minutos máximo' // ⚡ AGREGADO
     });
   } catch (err) {
     console.error('❌ Error guardando pedido:', err);
@@ -474,7 +550,7 @@ app.put('/orders/:id/entrega', authenticateToken, requireAdmin, async (req, res)
         entregado_por = $2,
         instrucciones_entrega = COALESCE(instrucciones_entrega, '') || ' | Entrega: ' || $3
       WHERE id = $1`,
-      [id, entregado_por, notas_entrega || 'Entregado correctamente']
+      [id, entregado_por, notas_entrega || 'Entregado correctamente en máximo 20 minutos'] // ⚡ ACTUALIZADO
     );
 
     res.json({ success: true, message: 'Pedido marcado como entregado' });
@@ -525,11 +601,11 @@ app.get('/admin/users', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// 📊 Estadísticas específicas para conjunto residencial
+// 📊 Estadísticas específicas para conjunto residencial - ⚡ ACTUALIZADO
 app.get('/admin/stats/residential', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const stats = await Promise.all([
-      // Estadísticas por torre
+      // Estadísticas por torre (ahora incluye Torre 5)
       pool.query(`
         SELECT torre_entrega, COUNT(*) as pedidos, SUM(total) as ventas
         FROM pedidos 
@@ -553,7 +629,7 @@ app.get('/admin/stats/residential', authenticateToken, requireAdmin, async (req,
         WHERE estado = 'pendiente' AND torre_entrega IS NOT NULL
         GROUP BY torre_entrega
       `),
-      // Usuarios registrados por torre
+      // Usuarios registrados por torre (ahora incluye Torre 5)
       pool.query(`
         SELECT torre, COUNT(*) as usuarios
         FROM usuarios 
@@ -579,10 +655,12 @@ app.get('/admin/stats/residential', authenticateToken, requireAdmin, async (req,
 // 🚀 NUEVAS RUTAS PARA GESTIÓN DE PEDIDOS
 // ===================
 
-// 📦 GET /api/admin/pedidos - Obtener todos los pedidos para gestión admin
+// 📦 GET /api/admin/pedidos - Obtener todos los pedidos para gestión admin - ⚡ ACTUALIZADO
 app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const query = `
+    const { torre, estado } = req.query;
+
+    let query = `
       SELECT 
         p.*,
         u.nombre as usuario_nombre,
@@ -590,34 +668,49 @@ app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) 
         u.telefono
       FROM pedidos p
       JOIN usuarios u ON p.usuario_id = u.id
-      ORDER BY p.fecha DESC
+      WHERE 1=1
     `;
+    const params = [];
+
+    // ⚡ ACTUALIZADO: Filtro de torre para incluir Torre 5
+    if (torre && ['1', '2', '3', '4', '5'].includes(torre)) {
+      query += ` AND p.torre_entrega = $${params.length + 1}`;
+      params.push(torre);
+    }
+
+    if (estado) {
+      query += ` AND p.estado = $${params.length + 1}`;
+      params.push(estado);
+    }
+
+    query += ` ORDER BY p.fecha DESC`;
     
-    const result = await pool.query(query);
+    const result = await pool.query(query, params);
     
-  const pedidosFormateados = result.rows.map(pedido => ({
-  id: pedido.id,
-  numero_pedido: `SUP-${pedido.id.toString().padStart(3, '0')}`,
-  usuario: {
-    id: pedido.usuario_id,
-    nombre: pedido.usuario_nombre,
-    email: pedido.usuario_email,
-    telefono: pedido.telefono
-  },
-  productos: typeof pedido.productos === 'string' 
-    ? JSON.parse(pedido.productos) 
-    : pedido.productos,
-  total: parseFloat(pedido.total),
-  estado: pedido.estado,
-  fecha_pedido: pedido.fecha,
-  fecha_entrega: pedido.fecha_entrega,
-  torre_entrega: pedido.torre_entrega,
-  piso_entrega: pedido.piso_entrega,
-  apartamento_entrega: pedido.apartamento_entrega,
-  instrucciones_entrega: pedido.instrucciones_entrega,
-  horario_preferido: pedido.horario_preferido,
-  telefono_contacto: pedido.telefono_contacto
-}));
+    const pedidosFormateados = result.rows.map(pedido => ({
+      id: pedido.id,
+      numero_pedido: `SUP-${pedido.id.toString().padStart(3, '0')}`,
+      usuario: {
+        id: pedido.usuario_id,
+        nombre: pedido.usuario_nombre,
+        email: pedido.usuario_email,
+        telefono: pedido.telefono
+      },
+      productos: typeof pedido.productos === 'string' 
+        ? JSON.parse(pedido.productos) 
+        : pedido.productos,
+      total: parseFloat(pedido.total),
+      estado: pedido.estado,
+      fecha_pedido: pedido.fecha,
+      fecha_entrega: pedido.fecha_entrega,
+      torre_entrega: pedido.torre_entrega,
+      piso_entrega: pedido.piso_entrega,
+      apartamento_entrega: pedido.apartamento_entrega,
+      instrucciones_entrega: pedido.instrucciones_entrega,
+      // ⚡ MANTENIDO: horario_preferido por compatibilidad, pero no se usa activamente
+      horario_preferido: pedido.horario_preferido,
+      telefono_contacto: pedido.telefono_contacto
+    }));
     
     res.json(pedidosFormateados);
     
@@ -659,18 +752,12 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
   }
 });
 
-// 🚀 Iniciar servidor
+// 🚀 Iniciar servidor - ⚡ ACTUALIZADO
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
   console.log('🔐 Sistema de autenticación activado');
-  console.log('🏢 Conjunto residencial: Torres 1, 2, 3, 4');
+  console.log('🏢 Conjunto residencial: Torres 1, 2, 3, 4, 5'); // ⚡ ACTUALIZADO
+  console.log('⚡ Entrega rápida: máximo 20 minutos'); // ⚡ AGREGADO
   console.log('📦 API de gestión de pedidos lista');
+  console.log('✅ Validaciones actualizadas para Torre 5');
 });
-
-
-
-
-
-
-
-
