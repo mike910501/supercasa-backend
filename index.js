@@ -198,14 +198,7 @@ app.post('/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'El email ya está registrado' });
     }
 
-    // Verificar si el apartamento ya está registrado
-    const apartmentExists = await pool.query(
-      'SELECT id FROM usuarios WHERE torre = $1 AND piso = $2 AND apartamento = $3', 
-      [torre, piso, apartamento]
-    );
-    if (apartmentExists.rows.length > 0) {
-      return res.status(400).json({ error: 'Este apartamento ya está registrado' });
-    }
+  
 
     // Encriptar contraseña
     const saltRounds = 10;
