@@ -406,7 +406,7 @@ app.put('/productos/:id', authenticateToken, requireAdmin, async (req, res) => {
 // 🛍️ RUTAS DE PEDIDOS
 // ===================
 
-// 🛍️ Crear pedido con datos de entrega residencial - ⚡ ACTUALIZADO
+// 🛍️ Crear pedido con datos de entrega residencial - ⚡ ACTUALIZADO CON WOMPI
 app.post('/orders', authenticateToken, async (req, res) => {
   const { 
     productos, 
@@ -415,8 +415,13 @@ app.post('/orders', authenticateToken, async (req, res) => {
     piso_entrega, 
     apartamento_entrega,
     instrucciones_entrega,
-    telefono_contacto
-    // ⚡ ELIMINADO: horario_preferido ya no se recibe del frontend
+    telefono_contacto,
+    // 💳 NUEVOS CAMPOS WOMPI
+    payment_reference,
+    payment_status = 'PENDING',
+    payment_method,
+    payment_transaction_id,
+    payment_amount_cents
   } = req.body;
 
   try {
@@ -442,12 +447,27 @@ app.post('/orders', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Total no válido' });
     }
 
+    // 💳 Validar referencia única de pago (si se proporciona)
+    if (payment_reference) {
+      const existingOrder = await pool.query(
+        'SELECT id FROM pedidos WHERE payment_reference = $1',
+        [payment_reference]
+      );
+      if (existingOrder.rows.length > 0) {
+        return res.status(400).json({
+          error: 'Ya existe un pedido con esta referencia de pago'
+        });
+      }
+    }
+
     const result = await pool.query(
       `INSERT INTO pedidos (
         usuario_id, productos, total, 
         torre_entrega, piso_entrega, apartamento_entrega,
-        instrucciones_entrega, telefono_contacto
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        instrucciones_entrega, telefono_contacto,
+        payment_reference, payment_status, payment_method,
+        payment_transaction_id, payment_amount_cents
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
       [
         req.user.userId, 
         JSON.stringify(productos), 
@@ -456,17 +476,30 @@ app.post('/orders', authenticateToken, async (req, res) => {
         piso_entrega, 
         apartamento_entrega,
         instrucciones_entrega,
-        telefono_contacto
-        // ⚡ ELIMINADO: horario_preferido del INSERT
+        telefono_contacto,
+        payment_reference,
+        payment_status,
+        payment_method,
+        payment_transaction_id,
+        payment_amount_cents
       ]
     );
+
+    console.log('✅ Pedido creado exitosamente:', {
+      id: result.rows[0].id,
+      usuario_id: req.user.userId,
+      total: totalInt,
+      payment_reference,
+      piso_entrega: parseInt(piso_entrega)
+    });
 
     res.json({ 
       success: true, 
       message: 'Pedido creado exitosamente - Entrega en máximo 20 minutos',
       pedidoId: result.rows[0].id,
       entrega: `Torre ${torre_entrega}, Piso ${piso_entrega}, Apt ${apartamento_entrega}`,
-      tiempoEstimado: '20 minutos máximo' // ⚡ AGREGADO
+      tiempoEstimado: '20 minutos máximo',
+      pedido: result.rows[0]
     });
   } catch (err) {
     console.error('❌ Error guardando pedido:', err);
@@ -514,6 +547,64 @@ app.get('/orders', authenticateToken, async (req, res) => {
   }
 });
 
+// 💳 Actualizar información de pago
+app.put('/orders/:id/payment', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      payment_status,
+      payment_transaction_id,
+      payment_method,
+      payment_amount_cents
+    } = req.body;
+
+    // Verificar que el pedido pertenece al usuario o que sea admin
+    const pedidoCheck = await pool.query(
+      'SELECT usuario_id FROM pedidos WHERE id = $1',
+      [id]
+    );
+
+    if (pedidoCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+
+    const esPropioPedido = pedidoCheck.rows[0].usuario_id === req.user.userId;
+    const esAdmin = req.user.rol === 'admin';
+
+    if (!esPropioPedido && !esAdmin) {
+      return res.status(403).json({ error: 'No tienes permiso para actualizar este pedido' });
+    }
+
+    const updateQuery = `
+      UPDATE pedidos 
+      SET 
+        payment_status = COALESCE($1, payment_status),
+        payment_transaction_id = COALESCE($2, payment_transaction_id),
+        payment_method = COALESCE($3, payment_method),
+        payment_amount_cents = COALESCE($4, payment_amount_cents)
+      WHERE id = $5 
+      RETURNING *
+    `;
+
+    const result = await pool.query(updateQuery, [
+      payment_status,
+      payment_transaction_id,
+      payment_method,
+      payment_amount_cents,
+      id
+    ]);
+
+    res.json({
+      message: 'Información de pago actualizada',
+      pedido: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error al actualizar pago:', error);
+    res.status(500).json({ error: 'Error al actualizar información de pago' });
+  }
+});
+
 // ✏️ Actualizar estado de un pedido (solo admin) - RUTA ORIGINAL
 app.put('/orders/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
@@ -550,7 +641,7 @@ app.put('/orders/:id/entrega', authenticateToken, requireAdmin, async (req, res)
         entregado_por = $2,
         instrucciones_entrega = COALESCE(instrucciones_entrega, '') || ' | Entrega: ' || $3
       WHERE id = $1`,
-      [id, entregado_por, notas_entrega || 'Entregado correctamente en máximo 20 minutos'] // ⚡ ACTUALIZADO
+      [id, entregado_por, notas_entrega || 'Entregado correctamente en máximo 20 minutos']
     );
 
     res.json({ success: true, message: 'Pedido marcado como entregado' });
@@ -572,7 +663,8 @@ app.get('/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
       pool.query('SELECT COUNT(*) as total_productos FROM productos'),
       pool.query('SELECT COUNT(*) as total_pedidos FROM pedidos'),
       pool.query('SELECT SUM(total) as ingresos_totales FROM pedidos WHERE estado != $1', ['cancelado']),
-      pool.query('SELECT COUNT(*) as pedidos_pendientes FROM pedidos WHERE estado = $1', ['pendiente'])
+      pool.query('SELECT COUNT(*) as pedidos_pendientes FROM pedidos WHERE estado = $1', ['pendiente']),
+      pool.query('SELECT COUNT(*) as pagos_aprobados FROM pedidos WHERE payment_status = $1', ['APPROVED'])
     ]);
 
     res.json({
@@ -580,7 +672,8 @@ app.get('/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
       totalProductos: parseInt(stats[1].rows[0].total_productos),
       totalPedidos: parseInt(stats[2].rows[0].total_pedidos),
       ingresosTotales: parseInt(stats[3].rows[0].ingresos_totales) || 0,
-      pedidosPendientes: parseInt(stats[4].rows[0].pedidos_pendientes)
+      pedidosPendientes: parseInt(stats[4].rows[0].pedidos_pendientes),
+      pagosAprobados: parseInt(stats[5].rows[0].pagos_aprobados)
     });
   } catch (err) {
     console.error('Error obteniendo estadísticas:', err);
@@ -707,9 +800,14 @@ app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) 
       piso_entrega: pedido.piso_entrega,
       apartamento_entrega: pedido.apartamento_entrega,
       instrucciones_entrega: pedido.instrucciones_entrega,
-      // ⚡ MANTENIDO: horario_preferido por compatibilidad, pero no se usa activamente
       horario_preferido: pedido.horario_preferido,
-      telefono_contacto: pedido.telefono_contacto
+      telefono_contacto: pedido.telefono_contacto,
+      // 💳 NUEVOS CAMPOS WOMPI
+      payment_reference: pedido.payment_reference,
+      payment_status: pedido.payment_status,
+      payment_method: pedido.payment_method,
+      payment_transaction_id: pedido.payment_transaction_id,
+      payment_amount_cents: pedido.payment_amount_cents
     }));
     
     res.json(pedidosFormateados);
@@ -756,8 +854,9 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
   console.log('🔐 Sistema de autenticación activado');
-  console.log('🏢 Conjunto residencial: Torres 1, 2, 3, 4, 5'); // ⚡ ACTUALIZADO
-  console.log('⚡ Entrega rápida: máximo 20 minutos'); // ⚡ AGREGADO
+  console.log('🏢 Conjunto residencial: Torres 1, 2, 3, 4, 5');
+  console.log('⚡ Entrega rápida: máximo 20 minutos');
   console.log('📦 API de gestión de pedidos lista');
+  console.log('💳 Sistema de tracking WOMPI integrado');
   console.log('✅ Validaciones actualizadas para Torre 5');
 });
