@@ -354,13 +354,13 @@ app.put('/auth/profile', authenticateToken, async (req, res) => {
 // 📦 RUTAS DE PRODUCTOS
 // ===================
 
-// 📥 Crear producto (solo admin)
+// 📥 Crear producto (solo admin) - ✅ CON STOCK Y CÓDIGO
 app.post('/productos', authenticateToken, requireAdmin, async (req, res) => {
-  const { nombre, precio, descripcion, nutricional, categoria, imagen } = req.body;
+  const { nombre, precio, descripcion, nutricional, categoria, imagen, stock, codigo } = req.body;
   try {
     await pool.query(
-      'INSERT INTO productos (nombre, precio, descripcion, nutricional, categoria, imagen) VALUES ($1, $2, $3, $4, $5, $6)',
-      [nombre, precio, descripcion, nutricional, categoria, imagen]
+      'INSERT INTO productos (nombre, precio, descripcion, nutricional, categoria, imagen, stock, codigo) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+      [nombre, precio, descripcion, nutricional, categoria, imagen, stock || 0, codigo]
     );
     res.send({ success: true });
   } catch (err) {
@@ -389,15 +389,15 @@ app.delete('/productos/:id', authenticateToken, requireAdmin, async (req, res) =
   }
 });
 
-// ✏️ Actualizar producto (solo admin)
+// ✏️ Actualizar producto (solo admin) - ✅ CON STOCK Y CÓDIGO  
 app.put('/productos/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { nombre, precio, descripcion, nutricional, categoria, imagen } = req.body;
+  const { nombre, precio, descripcion, nutricional, categoria, imagen, stock, codigo } = req.body;
 
   try {
     await pool.query(
-      'UPDATE productos SET nombre = $1, precio = $2, descripcion = $3, nutricional = $4, categoria = $5, imagen = $6 WHERE id = $7',
-      [nombre, precio, descripcion, nutricional, categoria, imagen, id]
+      'UPDATE productos SET nombre = $1, precio = $2, descripcion = $3, nutricional = $4, categoria = $5, imagen = $6, stock = $7, codigo = $8 WHERE id = $9',
+      [nombre, precio, descripcion, nutricional, categoria, imagen, stock || 0, codigo, id]
     );
     res.send({ success: true });
   } catch (err) {
@@ -410,6 +410,7 @@ app.put('/productos/:id', authenticateToken, requireAdmin, async (req, res) => {
 // ===================
 
 // 🛍️ Crear pedido con datos de entrega residencial - ⚡ ACTUALIZADO CON WOMPI
+// 🛍️ Crear pedido con CONTROL DE STOCK - ✅ ACTUALIZADO
 app.post('/orders', authenticateToken, async (req, res) => {
   const { 
     productos, 
@@ -463,6 +464,42 @@ app.post('/orders', authenticateToken, async (req, res) => {
       }
     }
 
+    // ✅ NUEVO: VERIFICAR STOCK ANTES DE CREAR PEDIDO
+    console.log('🔍 Verificando stock de productos...');
+    const erroresStock = [];
+    
+    for (const item of productos) {
+      const stockQuery = await pool.query(
+        'SELECT id, nombre, stock FROM productos WHERE id = $1',
+        [item.id]
+      );
+      
+      if (stockQuery.rows.length === 0) {
+        erroresStock.push(`Producto ID ${item.id} no encontrado`);
+        continue;
+      }
+      
+      const producto = stockQuery.rows[0];
+      const stockDisponible = producto.stock || 0;
+      const cantidadSolicitada = item.cantidad || 1;
+      
+      if (stockDisponible < cantidadSolicitada) {
+        erroresStock.push(`${producto.nombre}: Stock insuficiente (disponible: ${stockDisponible}, solicitado: ${cantidadSolicitada})`);
+      }
+    }
+    
+    // Si hay errores de stock, devolver error
+    if (erroresStock.length > 0) {
+      console.log('❌ Errores de stock:', erroresStock);
+      return res.status(400).json({ 
+        error: 'Stock insuficiente', 
+        detalles: erroresStock 
+      });
+    }
+
+    console.log('✅ Stock verificado correctamente');
+
+    // Crear el pedido (código original)
     const result = await pool.query(
       `INSERT INTO pedidos (
         usuario_id, productos, total, 
@@ -495,6 +532,22 @@ app.post('/orders', authenticateToken, async (req, res) => {
       payment_reference,
       piso_entrega: parseInt(piso_entrega)
     });
+
+    // ✅ NUEVO: REDUCIR STOCK DESPUÉS DE CREAR PEDIDO EXITOSO
+    console.log('📦 Reduciendo stock de productos...');
+    
+    for (const item of productos) {
+      const cantidadSolicitada = item.cantidad || 1;
+      
+      await pool.query(
+        'UPDATE productos SET stock = GREATEST(stock - $1, 0) WHERE id = $2',
+        [cantidadSolicitada, item.id]
+      );
+      
+      console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${cantidadSolicitada}`);
+    }
+
+    console.log('✅ Stock actualizado correctamente');
 
     res.json({ 
       success: true, 
@@ -821,7 +874,7 @@ app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) 
   }
 });
 
-// 🔄 PUT /api/admin/pedidos/:id/estado - Actualizar estado del pedido
+// 🔄 PUT /api/admin/pedidos/:id/estado - Actualizar estado del pedido + RESTAURAR STOCK
 app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -831,15 +884,46 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
     if (!estadosValidos.includes(estado)) {
       return res.status(400).json({ error: 'Estado no válido' });
     }
+
+    // ✅ OBTENER PRODUCTOS DEL PEDIDO ANTES DE CANCELAR
+    const pedidoQuery = await pool.query(
+      'SELECT productos FROM pedidos WHERE id = $1',
+      [id]
+    );
     
+    if (pedidoQuery.rows.length === 0) {
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+
     const fechaEntrega = estado === 'entregado' ? new Date() : null;
+    
     const result = await pool.query(
       'UPDATE pedidos SET estado = $1, fecha_entrega = $2 WHERE id = $3 RETURNING *',
       [estado, fechaEntrega, id]
     );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Pedido no encontrado' });
+
+    // ✅ NUEVO: RESTAURAR STOCK SI SE CANCELA
+    if (estado === 'cancelado') {
+      console.log('🔄 Restaurando stock por cancelación...');
+      
+      // ✅ CORREGIDO: Manejar si ya es objeto o string
+          const productosData = pedidoQuery.rows[0].productos;
+          const productos = typeof productosData === 'string' 
+            ? JSON.parse(productosData) 
+            : productosData;
+      
+      for (const item of productos) {
+        const cantidadARestaurar = item.cantidad || 1;
+        
+        await pool.query(
+          'UPDATE productos SET stock = stock + $1 WHERE id = $2',
+          [cantidadARestaurar, item.id]
+        );
+        
+        console.log(`📈 Stock restaurado: Producto ID ${item.id}, cantidad: +${cantidadARestaurar}`);
+      }
+      
+      console.log('✅ Stock restaurado completamente');
     }
     
     res.json({ 
