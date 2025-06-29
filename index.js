@@ -132,6 +132,14 @@ function validarDatosResidenciales(torre, piso, apartamento) {
   return errores;
 }
 
+// ✅ AGREGADO: Actualizar tabla usuarios para incluir CÉDULA
+pool.query(`
+  ALTER TABLE usuarios 
+  ADD COLUMN IF NOT EXISTS cedula VARCHAR(20) UNIQUE
+`).then(() => {
+  console.log("✅ Campo 'cedula' agregado a tabla usuarios");
+}).catch(err => console.log("ℹ️ Campo cedula ya existe:", err.message));
+
 // 🛡️ Middleware de autenticación
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -163,11 +171,12 @@ const requireAdmin = (req, res, next) => {
 // ===================
 
 // 📝 Registro de usuario con datos residenciales - ⚡ ACTUALIZADO
+// 📝 Registro de usuario SIN CONTRASEÑA - ✅ ACTUALIZADO
 app.post('/auth/register', async (req, res) => {
   const { 
     nombre, 
     email, 
-    password, 
+    cedula,  // ✅ NUEVO CAMPO
     telefono, 
     telefono_alternativo,
     torre, 
@@ -183,35 +192,31 @@ app.post('/auth/register', async (req, res) => {
       return res.status(400).json({ error: erroresValidacion.join(', ') });
     }
 
-    // Validaciones básicas
-    if (!nombre || !email || !password || !telefono) {
-      return res.status(400).json({ error: 'Todos los campos obligatorios deben estar completos' });
+    // ✅ VALIDACIONES ACTUALIZADAS (sin password)
+    if (!nombre || !email || !cedula || !telefono) {
+      return res.status(400).json({ error: 'Nombre, email, cédula y teléfono son obligatorios' });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
-    }
-
-    // Verificar si el usuario ya existe
-    const userExists = await pool.query('SELECT id FROM usuarios WHERE email = $1', [email]);
-    if (userExists.rows.length > 0) {
+    // ✅ VERIFICAR EMAIL ÚNICO
+    const emailExists = await pool.query('SELECT id FROM usuarios WHERE email = $1', [email]);
+    if (emailExists.rows.length > 0) {
       return res.status(400).json({ error: 'El email ya está registrado' });
     }
 
-  
+    // ✅ VERIFICAR CÉDULA ÚNICA
+    const cedulaExists = await pool.query('SELECT id FROM usuarios WHERE cedula = $1', [cedula]);
+    if (cedulaExists.rows.length > 0) {
+      return res.status(400).json({ error: 'La cédula ya está registrada' });
+    }
 
-    // Encriptar contraseña
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
-
-    // Crear usuario
+    // ✅ CREAR USUARIO SIN CONTRASEÑA
     const result = await pool.query(
       `INSERT INTO usuarios (
-        nombre, email, password, telefono, telefono_alternativo, 
+        nombre, email, cedula, telefono, telefono_alternativo, 
         torre, piso, apartamento, notas_entrega
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
-      RETURNING id, nombre, email, telefono, torre, piso, apartamento, rol`,
-      [nombre, email, hashedPassword, telefono, telefono_alternativo, torre, piso, apartamento, notas_entrega]
+      RETURNING id, nombre, email, cedula, telefono, torre, piso, apartamento, rol`,
+      [nombre, email, cedula, telefono, telefono_alternativo, torre, piso, apartamento, notas_entrega]
     );
 
     const user = result.rows[0];
@@ -235,6 +240,7 @@ app.post('/auth/register', async (req, res) => {
         id: user.id,
         nombre: user.nombre,
         email: user.email,
+        cedula: user.cedula,
         telefono: user.telefono,
         torre: user.torre,
         piso: user.piso,
@@ -249,24 +255,27 @@ app.post('/auth/register', async (req, res) => {
   }
 });
 
-// 🔑 Login de usuario
+// 🔑 Login de usuario SIN CONTRASEÑA - ✅ ACTUALIZADO
 app.post('/auth/login', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, cedula, telefono } = req.body;
 
   try {
-    // Buscar usuario
-    const result = await pool.query('SELECT * FROM usuarios WHERE email = $1', [email]);
+    // ✅ VALIDACIONES
+    if (!email || !cedula || !telefono) {
+      return res.status(400).json({ error: 'Email, cédula y teléfono son obligatorios' });
+    }
+
+    // ✅ BUSCAR USUARIO POR LOS 3 CAMPOS
+    const result = await pool.query(
+      'SELECT * FROM usuarios WHERE email = $1 AND cedula = $2 AND telefono = $3', 
+      [email.trim().toLowerCase(), cedula.trim(), telefono.trim()]
+    );
+
     if (result.rows.length === 0) {
-      return res.status(400).json({ error: 'Credenciales inválidas' });
+      return res.status(400).json({ error: 'Los datos ingresados no coinciden con ningún usuario registrado' });
     }
 
     const user = result.rows[0];
-
-    // Verificar contraseña
-    const isValidPassword = await bcrypt.compare(password, user.password);
-    if (!isValidPassword) {
-      return res.status(400).json({ error: 'Credenciales inválidas' });
-    }
 
     // Crear token JWT
     const token = jwt.sign(
@@ -287,6 +296,7 @@ app.post('/auth/login', async (req, res) => {
         id: user.id,
         nombre: user.nombre,
         email: user.email,
+        cedula: user.cedula,
         telefono: user.telefono,
         torre: user.torre,
         piso: user.piso,
