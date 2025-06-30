@@ -936,31 +936,17 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
-// ✅ WEBHOOK WOMPI CORREGIDO - REEMPLAZAR COMPLETAMENTE
+// ✅ WEBHOOK WOMPI INTELIGENTE - REEMPLAZAR COMPLETAMENTE
 app.post('/webhook/wompi', express.json(), async (req, res) => {
   try {
-    console.log('🔔 Webhook WOMPI - Headers:', req.headers);
-    console.log('🔔 Webhook WOMPI - Body tipo:', typeof req.body);
-    console.log('🔔 Webhook WOMPI - Body:', req.body);
+    console.log('🔔 Webhook WOMPI recibido');
     
     let event;
-    
-    // Manejar diferentes formatos de body
     if (typeof req.body === 'string') {
       event = JSON.parse(req.body);
-    } else if (typeof req.body === 'object') {
-      event = req.body;
     } else {
-      console.error('❌ Formato de body no válido:', req.body);
-      return res.status(400).json({ error: 'Formato inválido' });
+      event = req.body;
     }
-    
-    console.log('🔔 Evento procesado:', {
-      type: event.event,
-      transaction_id: event.data?.transaction?.id,
-      status: event.data?.transaction?.status,
-      reference: event.data?.transaction?.reference
-    });
     
     if (event.event === 'transaction.updated') {
       const transaction = event.data.transaction;
@@ -970,53 +956,91 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
       
       console.log(`📦 Procesando transacción ${transactionId} - Estado: ${status}`);
       
-      // Buscar pedido por referencia O por transaction_id
+      // Buscar pedido existente
       const pedidoResult = await pool.query(
         'SELECT id, productos FROM pedidos WHERE payment_reference = $1 OR payment_transaction_id = $2',
         [reference, transactionId]
       );
       
-      if (pedidoResult.rows.length === 0) {
-        console.error(`❌ No se encontró pedido con referencia ${reference} o ID ${transactionId}`);
-        return res.status(200).json({ message: 'Pedido no encontrado, pero webhook procesado' });
-      }
-      
-      const pedido = pedidoResult.rows[0];
-      
-      if (status === 'APPROVED') {
-        console.log(`✅ Actualizando pedido ${pedido.id} como APROBADO`);
+      if (pedidoResult.rows.length === 0 && status === 'APPROVED') {
+        console.log(`🚨 PEDIDO NO ENCONTRADO - Creando desde webhook para transacción ${transactionId}`);
         
-        await pool.query(
-          `UPDATE pedidos SET 
-            payment_status = 'APPROVED',
-            payment_transaction_id = $1,
-            estado = 'pendiente'
-          WHERE id = $2`,
-          [transactionId, pedido.id]
-        );
-        
-        console.log(`✅ Pedido ${pedido.id} marcado como pagado vía webhook`);
-        
-      } else if (status === 'DECLINED') {
-        console.log(`❌ Pago rechazado para pedido ${pedido.id}`);
-        
-        await pool.query(
-          'UPDATE pedidos SET payment_status = $1, estado = $2 WHERE id = $3',
-          ['DECLINED', 'cancelado', pedido.id]
-        );
-        
-        // Restaurar stock
-        const productos = typeof pedido.productos === 'string' 
-          ? JSON.parse(pedido.productos) : pedido.productos;
-          
-        for (const item of productos) {
-          await pool.query(
-            'UPDATE productos SET stock = stock + $1 WHERE id = $2',
-            [item.cantidad || 1, item.id]
+        // ✅ CREAR PEDIDO DESDE WEBHOOK
+        try {
+          // Buscar usuario por email (usando el email de la transacción)
+          const userResult = await pool.query(
+            'SELECT id, nombre, torre, piso, apartamento FROM usuarios WHERE email = $1',
+            [transaction.customer_email]
           );
+          
+          if (userResult.rows.length > 0) {
+            const usuario = userResult.rows[0];
+            
+            // Crear pedido básico desde webhook
+            const pedidoWebhook = await pool.query(
+              `INSERT INTO pedidos (
+                usuario_id, productos, total, 
+                torre_entrega, piso_entrega, apartamento_entrega,
+                telefono_contacto, payment_reference, payment_status,
+                payment_method, payment_transaction_id, payment_amount_cents, estado
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
+              RETURNING id`,
+              [
+                usuario.id,
+                JSON.stringify([{
+                  id: 'webhook',
+                  nombre: 'Producto desde webhook',
+                  cantidad: 1,
+                  precio: transaction.amount_in_cents / 100
+                }]),
+                transaction.amount_in_cents / 100,
+                usuario.torre,
+                usuario.piso, 
+                usuario.apartamento,
+                'N/A',
+                reference,
+                'APPROVED',
+                transaction.payment_method_type,
+                transactionId,
+                transaction.amount_in_cents,
+                'pendiente'
+              ]
+            );
+            
+            console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook para usuario ${usuario.nombre}`);
+            
+          } else {
+            console.log(`❌ Usuario no encontrado para email ${transaction.customer_email}`);
+          }
+          
+        } catch (createError) {
+          console.error('❌ Error creando pedido desde webhook:', createError);
         }
         
-        console.log(`❌ Pedido ${pedido.id} cancelado y stock restaurado vía webhook`);
+      } else if (pedidoResult.rows.length > 0) {
+        // Actualizar pedido existente
+        const pedido = pedidoResult.rows[0];
+        
+        if (status === 'APPROVED') {
+          await pool.query(
+            `UPDATE pedidos SET 
+              payment_status = 'APPROVED',
+              payment_transaction_id = $1,
+              estado = 'pendiente'
+            WHERE id = $2`,
+            [transactionId, pedido.id]
+          );
+          
+          console.log(`✅ Pedido ${pedido.id} actualizado como APROBADO vía webhook`);
+          
+        } else if (status === 'DECLINED') {
+          await pool.query(
+            'UPDATE pedidos SET payment_status = $1, estado = $2 WHERE id = $3',
+            ['DECLINED', 'cancelado', pedido.id]
+          );
+          
+          console.log(`❌ Pedido ${pedido.id} marcado como RECHAZADO vía webhook`);
+        }
       }
     }
     
