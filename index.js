@@ -419,7 +419,7 @@ app.put('/productos/:id', authenticateToken, requireAdmin, async (req, res) => {
 // 🛍️ RUTAS DE PEDIDOS
 // ===================
 
-// 🛍️ Crear pedido con CONTROL DE STOCK
+// 🛍️ Crear pedido con CONTROL DE STOCK + CÓDIGOS
 app.post('/orders', authenticateToken, async (req, res) => {
   const { 
     productos, 
@@ -469,19 +469,20 @@ app.post('/orders', authenticateToken, async (req, res) => {
       }
     }
 
-    // ✅ VERIFICAR STOCK ANTES DE CREAR PEDIDO
+    // ✅ VERIFICAR STOCK Y OBTENER CÓDIGOS
     console.log('🔍 Verificando stock de productos...');
     const erroresStock = [];
+    const productosConCodigo = []; // 🎯 NUEVO: Array para productos con código
     
     for (const item of productos) {
       const stockQuery = await pool.query(
-        'SELECT id, nombre, stock FROM productos WHERE id = $1',
+        'SELECT id, nombre, stock, codigo FROM productos WHERE id = $1', // 🎯 AGREGADO: codigo
         [item.id]
       );
       
       if (stockQuery.rows.length === 0) {
         erroresStock.push(`Producto ID ${item.id} no encontrado`);
-        continue;
+        continue; // ✅ DENTRO del for loop
       }
       
       const producto = stockQuery.rows[0];
@@ -491,6 +492,15 @@ app.post('/orders', authenticateToken, async (req, res) => {
       if (stockDisponible < cantidadSolicitada) {
         erroresStock.push(`${producto.nombre}: Stock insuficiente (disponible: ${stockDisponible}, solicitado: ${cantidadSolicitada})`);
       }
+      
+      // 🎯 NUEVO: Agregar producto con código
+      productosConCodigo.push({
+        id: item.id,
+        nombre: producto.nombre,
+        precio: item.precio,
+        cantidad: item.cantidad,
+        codigo: producto.codigo // 🎯 AGREGAR CÓDIGO
+      });
     }
     
     if (erroresStock.length > 0) {
@@ -513,7 +523,7 @@ app.post('/orders', authenticateToken, async (req, res) => {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
       [
         req.user.userId, 
-        JSON.stringify(productos), 
+        JSON.stringify(productosConCodigo), // 🎯 USAR PRODUCTOS CON CÓDIGO
         totalInt,
         torre_entrega,
         piso_entrega, 
