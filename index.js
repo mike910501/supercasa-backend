@@ -1055,22 +1055,22 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
   }
 });
 
-// ✅ ENDPOINT VERIFICACIÓN CORREGIDO
+// ✅ ENDPOINT VERIFICACIÓN CORREGIDO - REEMPLAZAR COMPLETAMENTE
 app.get('/api/verificar-pago/:transactionId', authenticateToken, async (req, res) => {
   const { transactionId } = req.params;
   
   try {
     console.log(`🔍 Verificando transacción: ${transactionId}`);
     
-    // PASO 1: Buscar en BD primero
+    // ✅ BÚSQUEDA MÁS AMPLIA - incluir reference también
     const pedidoLocal = await pool.query(
-      'SELECT * FROM pedidos WHERE payment_transaction_id = $1 OR payment_reference = $1',
-      [transactionId]
+      'SELECT * FROM pedidos WHERE payment_transaction_id = $1 OR payment_reference = $1 OR payment_reference LIKE $2',
+      [transactionId, `%${transactionId}%`]
     );
     
     if (pedidoLocal.rows.length > 0) {
       const pedido = pedidoLocal.rows[0];
-      console.log(`✅ Pedido encontrado: ${pedido.id}, estado: ${pedido.payment_status}`);
+      console.log(`✅ Pedido encontrado en BD: ${pedido.id}, estado: ${pedido.payment_status}`);
       
       if (pedido.payment_status === 'APPROVED') {
         return res.json({
@@ -1082,7 +1082,34 @@ app.get('/api/verificar-pago/:transactionId', authenticateToken, async (req, res
       }
     }
     
-    // PASO 2: Consultar WOMPI
+    // ✅ ESPERAR MÁS TIEMPO AL WEBHOOK (hasta 30 segundos)
+    console.log('⏳ Pedido no encontrado, esperando webhook...');
+    
+    let intentos = 0;
+    while (intentos < 15) { // 15 intentos x 2 segundos = 30 segundos
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const pedidoCreado = await pool.query(
+        'SELECT * FROM pedidos WHERE payment_transaction_id = $1 OR payment_reference = $1',
+        [transactionId]
+      );
+      
+      if (pedidoCreado.rows.length > 0) {
+        const pedido = pedidoCreado.rows[0];
+        console.log(`✅ Webhook creó pedido: ${pedido.id}`);
+        return res.json({
+          status: 'APPROVED',
+          message: 'Pago confirmado y pedido creado por webhook',
+          pedidoId: pedido.id,
+          reference: pedido.payment_reference
+        });
+      }
+      
+      intentos++;
+      console.log(`⏳ Esperando webhook... ${intentos}/15`);
+    }
+    
+    // ✅ SI NO ENCUENTRA NADA, CONSULTAR WOMPI COMO BACKUP
     const wompiResponse = await fetch(
       `https://api.wompi.co/v1/transactions/${transactionId}`,
       {
@@ -1096,46 +1123,11 @@ app.get('/api/verificar-pago/:transactionId', authenticateToken, async (req, res
     if (wompiResponse.ok) {
       const wompiData = await wompiResponse.json();
       const status = wompiData.data?.status;
-      const reference = wompiData.data?.reference;
-      
-      console.log(`📊 Estado en WOMPI: ${status}`);
-      
-      if (status === 'APPROVED') {
-        // PASO 3: Esperar que webhook cree el pedido
-        let intentos = 0;
-        while (intentos < 5) {
-          await new Promise(resolve => setTimeout(resolve, 2000)); // 2 segundos
-          
-          const pedidoCreado = await pool.query(
-            'SELECT * FROM pedidos WHERE payment_transaction_id = $1 OR payment_reference = $2',
-            [transactionId, reference]
-          );
-          
-          if (pedidoCreado.rows.length > 0) {
-            console.log(`✅ Webhook creó pedido: ${pedidoCreado.rows[0].id}`);
-            return res.json({
-              status: 'APPROVED',
-              message: 'Pago confirmado y pedido creado',
-              pedidoId: pedidoCreado.rows[0].id,
-              reference: reference
-            });
-          }
-          
-          intentos++;
-          console.log(`⏳ Esperando webhook... ${intentos}/5`);
-        }
-        
-        return res.json({
-          status: 'PENDING',
-          message: 'Pago aprobado, procesando...',
-          reference: reference
-        });
-      }
       
       res.json({
         status: status || 'PENDING',
-        message: status === 'DECLINED' ? 'Pago rechazado' : 'En proceso',
-        reference: reference
+        message: status === 'APPROVED' ? 'Pago confirmado pero pedido no encontrado' : 'En proceso',
+        reference: wompiData.data?.reference
       });
     } else {
       res.json({ status: 'PENDING', message: 'Verificando...' });
