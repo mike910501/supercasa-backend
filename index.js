@@ -25,7 +25,7 @@ pool.query(`
     id SERIAL PRIMARY KEY,
     nombre VARCHAR(100) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
+    password VARCHAR(255), -- ✅ CORREGIDO: Ya no es NOT NULL
     telefono VARCHAR(20),
     direccion TEXT,
     fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -63,16 +63,23 @@ pool.query(`
 `).then(() => console.log("✅ Tabla 'pedidos' lista"))
   .catch(err => console.error("❌ Error creando tabla pedidos:", err));
 
-// ✅ Actualizar tabla usuarios para incluir datos residenciales (Torres 1,2,3,4,5) - ⚡ ACTUALIZADO
+// ✅ CORREGIDO: Hacer password opcional
+pool.query(`
+  ALTER TABLE usuarios 
+  ALTER COLUMN password DROP NOT NULL
+`).then(() => console.log("✅ Campo password ahora es opcional"))
+  .catch(err => console.log("ℹ️ Ya es opcional:", err.message));
+
+// ✅ Actualizar tabla usuarios para incluir datos residenciales (Torres 1,2,3,4,5)
 pool.query(`
   ALTER TABLE usuarios 
   ADD COLUMN IF NOT EXISTS torre VARCHAR(1),
   ADD COLUMN IF NOT EXISTS piso INTEGER CHECK (piso >= 1 AND piso <= 30),
   ADD COLUMN IF NOT EXISTS apartamento VARCHAR(10),
   ADD COLUMN IF NOT EXISTS telefono_alternativo VARCHAR(20),
-  ADD COLUMN IF NOT EXISTS notas_entrega TEXT
+  ADD COLUMN IF NOT EXISTS notas_entrega TEXT,
+  ADD COLUMN IF NOT EXISTS cedula VARCHAR(20) UNIQUE
 `).then(async () => {
-  // ⚡ ACTUALIZAR: Constraint de torres para incluir Torre 5
   try {
     await pool.query(`
       ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_torre_check;
@@ -85,7 +92,15 @@ pool.query(`
   }
 }).catch(err => console.log("ℹ️ Columnas ya existen o error:", err.message));
 
-// ✅ Actualizar tabla pedidos para entrega residencial (Torres 1,2,3,4,5) - ⚡ ACTUALIZADO
+// ✅ CORREGIDO: Actualizar tabla productos para incluir STOCK y CÓDIGO
+pool.query(`
+  ALTER TABLE productos 
+  ADD COLUMN IF NOT EXISTS stock INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS codigo VARCHAR(20) UNIQUE
+`).then(() => console.log("✅ Campos stock y codigo agregados a productos"))
+  .catch(err => console.log("ℹ️ Campos ya existen:", err.message));
+
+// ✅ Actualizar tabla pedidos para entrega residencial (Torres 1,2,3,4,5)
 pool.query(`
   ALTER TABLE pedidos 
   ADD COLUMN IF NOT EXISTS torre_entrega VARCHAR(1),
@@ -96,7 +111,6 @@ pool.query(`
   ADD COLUMN IF NOT EXISTS entregado_por VARCHAR(100),
   ADD COLUMN IF NOT EXISTS fecha_entrega TIMESTAMP
 `).then(async () => {
-  // ⚡ ACTUALIZAR: Constraint de torres para incluir Torre 5
   try {
     await pool.query(`
       ALTER TABLE pedidos DROP CONSTRAINT IF EXISTS pedidos_torre_entrega_check;
@@ -109,22 +123,30 @@ pool.query(`
   }
 }).catch(err => console.log("ℹ️ Columnas ya existen o error:", err.message));
 
-// ⚡ AGREGADO: Función de validación para datos residenciales
+// ✅ CORREGIDO: Agregar campos de pago WOMPI a tabla pedidos
+pool.query(`
+  ALTER TABLE pedidos 
+  ADD COLUMN IF NOT EXISTS payment_reference VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS payment_status VARCHAR(20) DEFAULT 'PENDING',
+  ADD COLUMN IF NOT EXISTS payment_method VARCHAR(50),
+  ADD COLUMN IF NOT EXISTS payment_transaction_id VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS payment_amount_cents INTEGER
+`).then(() => console.log("✅ Campos de pago WOMPI agregados"))
+  .catch(err => console.log("ℹ️ Campos ya existen:", err.message));
+
+// ⚡ Función de validación para datos residenciales
 function validarDatosResidenciales(torre, piso, apartamento) {
   const errores = [];
 
-  // Validar torre (ahora incluye Torre 5)
   if (!['1', '2', '3', '4', '5'].includes(String(torre))) {
     errores.push('Torre debe ser 1, 2, 3, 4 o 5');
   }
 
-  // Validar piso
   const pisoNum = parseInt(piso);
   if (!piso || pisoNum < 1 || pisoNum > 30) {
     errores.push('El piso debe estar entre 1 y 30');
   }
 
-  // Validar apartamento
   if (!apartamento || apartamento.length === 0) {
     errores.push('El apartamento es obligatorio');
   }
@@ -132,18 +154,10 @@ function validarDatosResidenciales(torre, piso, apartamento) {
   return errores;
 }
 
-// ✅ AGREGADO: Actualizar tabla usuarios para incluir CÉDULA
-pool.query(`
-  ALTER TABLE usuarios 
-  ADD COLUMN IF NOT EXISTS cedula VARCHAR(20) UNIQUE
-`).then(() => {
-  console.log("✅ Campo 'cedula' agregado a tabla usuarios");
-}).catch(err => console.log("ℹ️ Campo cedula ya existe:", err.message));
-
 // 🛡️ Middleware de autenticación
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+  const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
     return res.status(401).json({ error: 'Token de acceso requerido' });
@@ -170,13 +184,12 @@ const requireAdmin = (req, res, next) => {
 // 🔐 RUTAS DE AUTENTICACIÓN
 // ===================
 
-// 📝 Registro de usuario con datos residenciales - ⚡ ACTUALIZADO
-// 📝 Registro de usuario SIN CONTRASEÑA - ✅ ACTUALIZADO
+// 📝 Registro de usuario SIN CONTRASEÑA - ✅ CORREGIDO
 app.post('/auth/register', async (req, res) => {
   const { 
     nombre, 
     email, 
-    cedula,  // ✅ NUEVO CAMPO
+    cedula,
     telefono, 
     telefono_alternativo,
     torre, 
@@ -186,42 +199,39 @@ app.post('/auth/register', async (req, res) => {
   } = req.body;
 
   try {
-    // ⚡ AGREGADO: Validar datos residenciales
     const erroresValidacion = validarDatosResidenciales(torre, piso, apartamento);
     if (erroresValidacion.length > 0) {
       return res.status(400).json({ error: erroresValidacion.join(', ') });
     }
 
-    // ✅ VALIDACIONES ACTUALIZADAS (sin password)
     if (!nombre || !email || !cedula || !telefono) {
       return res.status(400).json({ error: 'Nombre, email, cédula y teléfono son obligatorios' });
     }
 
-    // ✅ VERIFICAR EMAIL ÚNICO
-    const emailExists = await pool.query('SELECT id FROM usuarios WHERE email = $1', [email]);
+    // ✅ CORREGIDO: Normalizar email
+    const emailNormalizado = email.trim().toLowerCase();
+
+    const emailExists = await pool.query('SELECT id FROM usuarios WHERE email = $1', [emailNormalizado]);
     if (emailExists.rows.length > 0) {
       return res.status(400).json({ error: 'El email ya está registrado' });
     }
 
-    // ✅ VERIFICAR CÉDULA ÚNICA
     const cedulaExists = await pool.query('SELECT id FROM usuarios WHERE cedula = $1', [cedula]);
     if (cedulaExists.rows.length > 0) {
       return res.status(400).json({ error: 'La cédula ya está registrada' });
     }
 
-    // ✅ CREAR USUARIO SIN CONTRASEÑA
     const result = await pool.query(
       `INSERT INTO usuarios (
         nombre, email, cedula, telefono, telefono_alternativo, 
         torre, piso, apartamento, notas_entrega
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
       RETURNING id, nombre, email, cedula, telefono, torre, piso, apartamento, rol`,
-      [nombre, email, cedula, telefono, telefono_alternativo, torre, piso, apartamento, notas_entrega]
+      [nombre, emailNormalizado, cedula, telefono, telefono_alternativo, torre, piso, apartamento, notas_entrega]
     );
 
     const user = result.rows[0];
 
-    // Crear token JWT
     const token = jwt.sign(
       { 
         userId: user.id, 
@@ -255,20 +265,21 @@ app.post('/auth/register', async (req, res) => {
   }
 });
 
-// 🔑 Login de usuario SIN CONTRASEÑA - ✅ ACTUALIZADO
+// 🔑 Login de usuario SIN CONTRASEÑA - ✅ CORREGIDO
 app.post('/auth/login', async (req, res) => {
   const { email, cedula, telefono } = req.body;
 
   try {
-    // ✅ VALIDACIONES
     if (!email || !cedula || !telefono) {
       return res.status(400).json({ error: 'Email, cédula y teléfono son obligatorios' });
     }
 
-    // ✅ BUSCAR USUARIO POR LOS 3 CAMPOS
+    // ✅ CORREGIDO: Normalizar email en login también
+    const emailNormalizado = email.trim().toLowerCase();
+
     const result = await pool.query(
       'SELECT * FROM usuarios WHERE email = $1 AND cedula = $2 AND telefono = $3', 
-      [email.trim().toLowerCase(), cedula.trim(), telefono.trim()]
+      [emailNormalizado, cedula.trim(), telefono.trim()]
     );
 
     if (result.rows.length === 0) {
@@ -277,7 +288,6 @@ app.post('/auth/login', async (req, res) => {
 
     const user = result.rows[0];
 
-    // Crear token JWT
     const token = jwt.sign(
       { 
         userId: user.id, 
@@ -354,7 +364,7 @@ app.put('/auth/profile', authenticateToken, async (req, res) => {
 // 📦 RUTAS DE PRODUCTOS
 // ===================
 
-// 📥 Crear producto (solo admin) - ✅ CON STOCK Y CÓDIGO
+// 📥 Crear producto (solo admin)
 app.post('/productos', authenticateToken, requireAdmin, async (req, res) => {
   const { nombre, precio, descripcion, nutricional, categoria, imagen, stock, codigo } = req.body;
   try {
@@ -389,7 +399,7 @@ app.delete('/productos/:id', authenticateToken, requireAdmin, async (req, res) =
   }
 });
 
-// ✏️ Actualizar producto (solo admin) - ✅ CON STOCK Y CÓDIGO  
+// ✏️ Actualizar producto (solo admin)
 app.put('/productos/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
   const { nombre, precio, descripcion, nutricional, categoria, imagen, stock, codigo } = req.body;
@@ -409,8 +419,7 @@ app.put('/productos/:id', authenticateToken, requireAdmin, async (req, res) => {
 // 🛍️ RUTAS DE PEDIDOS
 // ===================
 
-// 🛍️ Crear pedido con datos de entrega residencial - ⚡ ACTUALIZADO CON WOMPI
-// 🛍️ Crear pedido con CONTROL DE STOCK - ✅ ACTUALIZADO
+// 🛍️ Crear pedido con CONTROL DE STOCK
 app.post('/orders', authenticateToken, async (req, res) => {
   const { 
     productos, 
@@ -420,7 +429,6 @@ app.post('/orders', authenticateToken, async (req, res) => {
     apartamento_entrega,
     instrucciones_entrega,
     telefono_contacto,
-    // 💳 NUEVOS CAMPOS WOMPI
     payment_reference,
     payment_status = 'PENDING',
     payment_method,
@@ -429,13 +437,11 @@ app.post('/orders', authenticateToken, async (req, res) => {
   } = req.body;
 
   try {
-    // ⚡ AGREGADO: Validar datos de entrega
     const erroresValidacion = validarDatosResidenciales(torre_entrega, piso_entrega, apartamento_entrega);
     if (erroresValidacion.length > 0) {
       return res.status(400).json({ error: `Datos de entrega: ${erroresValidacion.join(', ')}` });
     }
 
-    // Validaciones básicas
     if (!productos || productos.length === 0) {
       return res.status(400).json({ error: 'El pedido debe tener al menos un producto' });
     }
@@ -451,7 +457,6 @@ app.post('/orders', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Total no válido' });
     }
 
-    // 💳 Validar referencia única de pago (si se proporciona)
     if (payment_reference) {
       const existingOrder = await pool.query(
         'SELECT id FROM pedidos WHERE payment_reference = $1',
@@ -464,7 +469,7 @@ app.post('/orders', authenticateToken, async (req, res) => {
       }
     }
 
-    // ✅ NUEVO: VERIFICAR STOCK ANTES DE CREAR PEDIDO
+    // ✅ VERIFICAR STOCK ANTES DE CREAR PEDIDO
     console.log('🔍 Verificando stock de productos...');
     const erroresStock = [];
     
@@ -488,7 +493,6 @@ app.post('/orders', authenticateToken, async (req, res) => {
       }
     }
     
-    // Si hay errores de stock, devolver error
     if (erroresStock.length > 0) {
       console.log('❌ Errores de stock:', erroresStock);
       return res.status(400).json({ 
@@ -499,7 +503,6 @@ app.post('/orders', authenticateToken, async (req, res) => {
 
     console.log('✅ Stock verificado correctamente');
 
-    // Crear el pedido (código original)
     const result = await pool.query(
       `INSERT INTO pedidos (
         usuario_id, productos, total, 
@@ -533,7 +536,7 @@ app.post('/orders', authenticateToken, async (req, res) => {
       piso_entrega: parseInt(piso_entrega)
     });
 
-    // ✅ NUEVO: REDUCIR STOCK DESPUÉS DE CREAR PEDIDO EXITOSO
+    // ✅ REDUCIR STOCK DESPUÉS DE CREAR PEDIDO EXITOSO
     console.log('📦 Reduciendo stock de productos...');
     
     for (const item of productos) {
@@ -569,7 +572,6 @@ app.get('/orders', authenticateToken, async (req, res) => {
     let query, params;
     
     if (req.user.rol === 'admin') {
-      // Los admin ven todos los pedidos con info completa de entrega
       query = `
         SELECT 
           p.*,
@@ -583,7 +585,6 @@ app.get('/orders', authenticateToken, async (req, res) => {
       `;
       params = [];
     } else {
-      // Los usuarios solo ven sus propios pedidos
       query = `
         SELECT 
           *,
@@ -614,7 +615,6 @@ app.put('/orders/:id/payment', authenticateToken, async (req, res) => {
       payment_amount_cents
     } = req.body;
 
-    // Verificar que el pedido pertenece al usuario o que sea admin
     const pedidoCheck = await pool.query(
       'SELECT usuario_id FROM pedidos WHERE id = $1',
       [id]
@@ -661,7 +661,7 @@ app.put('/orders/:id/payment', authenticateToken, async (req, res) => {
   }
 });
 
-// ✏️ Actualizar estado de un pedido (solo admin) - RUTA ORIGINAL
+// ✏️ Actualizar estado de un pedido (solo admin)
 app.put('/orders/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
   const { estado } = req.body;
@@ -720,7 +720,11 @@ app.get('/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
       pool.query('SELECT COUNT(*) as total_pedidos FROM pedidos'),
       pool.query('SELECT SUM(total) as ingresos_totales FROM pedidos WHERE estado != $1', ['cancelado']),
       pool.query('SELECT COUNT(*) as pedidos_pendientes FROM pedidos WHERE estado = $1', ['pendiente']),
-      pool.query('SELECT COUNT(*) as pagos_aprobados FROM pedidos WHERE payment_status = $1', ['APPROVED'])
+      pool.query('SELECT COUNT(*) as pagos_aprobados FROM pedidos WHERE payment_status = $1', ['APPROVED']),
+      // ✅ NUEVO: Estadísticas de inventario
+      pool.query('SELECT COUNT(*) as productos_sin_stock FROM productos WHERE stock = 0'),
+      pool.query('SELECT COUNT(*) as productos_stock_bajo FROM productos WHERE stock > 0 AND stock <= 5'),
+      pool.query('SELECT SUM(stock) as stock_total FROM productos')
     ]);
 
     res.json({
@@ -729,7 +733,11 @@ app.get('/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
       totalPedidos: parseInt(stats[2].rows[0].total_pedidos),
       ingresosTotales: parseInt(stats[3].rows[0].ingresos_totales) || 0,
       pedidosPendientes: parseInt(stats[4].rows[0].pedidos_pendientes),
-      pagosAprobados: parseInt(stats[5].rows[0].pagos_aprobados)
+      pagosAprobados: parseInt(stats[5].rows[0].pagos_aprobados),
+      // ✅ NUEVO: Estadísticas de inventario
+      productosSinStock: parseInt(stats[6].rows[0].productos_sin_stock),
+      productosStockBajo: parseInt(stats[7].rows[0].productos_stock_bajo),
+      stockTotal: parseInt(stats[8].rows[0].stock_total) || 0
     });
   } catch (err) {
     console.error('Error obteniendo estadísticas:', err);
@@ -741,7 +749,7 @@ app.get('/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
 app.get('/admin/users', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, nombre, email, telefono, direccion, rol, fecha_registro FROM usuarios ORDER BY fecha_registro DESC'
+      'SELECT id, nombre, email, telefono, direccion, rol, fecha_registro, torre, piso, apartamento, cedula FROM usuarios ORDER BY fecha_registro DESC'
     );
     res.json(result.rows);
   } catch (err) {
@@ -750,11 +758,10 @@ app.get('/admin/users', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// 📊 Estadísticas específicas para conjunto residencial - ⚡ ACTUALIZADO
+// 📊 Estadísticas específicas para conjunto residencial
 app.get('/admin/stats/residential', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const stats = await Promise.all([
-      // Estadísticas por torre (ahora incluye Torre 5)
       pool.query(`
         SELECT torre_entrega, COUNT(*) as pedidos, SUM(total) as ventas
         FROM pedidos 
@@ -762,7 +769,6 @@ app.get('/admin/stats/residential', authenticateToken, requireAdmin, async (req,
         GROUP BY torre_entrega
         ORDER BY torre_entrega
       `),
-      // Pisos más activos
       pool.query(`
         SELECT piso_entrega, COUNT(*) as pedidos
         FROM pedidos 
@@ -771,14 +777,12 @@ app.get('/admin/stats/residential', authenticateToken, requireAdmin, async (req,
         ORDER BY pedidos DESC
         LIMIT 5
       `),
-      // Entregas pendientes por torre
       pool.query(`
         SELECT torre_entrega, COUNT(*) as pendientes
         FROM pedidos 
         WHERE estado = 'pendiente' AND torre_entrega IS NOT NULL
         GROUP BY torre_entrega
       `),
-      // Usuarios registrados por torre (ahora incluye Torre 5)
       pool.query(`
         SELECT torre, COUNT(*) as usuarios
         FROM usuarios 
@@ -801,10 +805,10 @@ app.get('/admin/stats/residential', authenticateToken, requireAdmin, async (req,
 });
 
 // ===================
-// 🚀 NUEVAS RUTAS PARA GESTIÓN DE PEDIDOS
+// 🚀 RUTAS PARA GESTIÓN DE PEDIDOS
 // ===================
 
-// 📦 GET /api/admin/pedidos - Obtener todos los pedidos para gestión admin - ⚡ ACTUALIZADO
+// 📦 Obtener todos los pedidos para gestión admin
 app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { torre, estado } = req.query;
@@ -821,7 +825,6 @@ app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) 
     `;
     const params = [];
 
-    // ⚡ ACTUALIZADO: Filtro de torre para incluir Torre 5
     if (torre && ['1', '2', '3', '4', '5'].includes(torre)) {
       query += ` AND p.torre_entrega = $${params.length + 1}`;
       params.push(torre);
@@ -858,7 +861,6 @@ app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) 
       instrucciones_entrega: pedido.instrucciones_entrega,
       horario_preferido: pedido.horario_preferido,
       telefono_contacto: pedido.telefono_contacto,
-      // 💳 NUEVOS CAMPOS WOMPI
       payment_reference: pedido.payment_reference,
       payment_status: pedido.payment_status,
       payment_method: pedido.payment_method,
@@ -874,7 +876,7 @@ app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) 
   }
 });
 
-// 🔄 PUT /api/admin/pedidos/:id/estado - Actualizar estado del pedido + RESTAURAR STOCK
+// 🔄 Actualizar estado del pedido + RESTAURAR STOCK
 app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
@@ -885,7 +887,6 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
       return res.status(400).json({ error: 'Estado no válido' });
     }
 
-    // ✅ OBTENER PRODUCTOS DEL PEDIDO ANTES DE CANCELAR
     const pedidoQuery = await pool.query(
       'SELECT productos FROM pedidos WHERE id = $1',
       [id]
@@ -902,15 +903,14 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
       [estado, fechaEntrega, id]
     );
 
-    // ✅ NUEVO: RESTAURAR STOCK SI SE CANCELA
+    // ✅ RESTAURAR STOCK SI SE CANCELA
     if (estado === 'cancelado') {
       console.log('🔄 Restaurando stock por cancelación...');
       
-      // ✅ CORREGIDO: Manejar si ya es objeto o string
-          const productosData = pedidoQuery.rows[0].productos;
-          const productos = typeof productosData === 'string' 
-            ? JSON.parse(productosData) 
-            : productosData;
+      const productosData = pedidoQuery.rows[0].productos;
+      const productos = typeof productosData === 'string' 
+        ? JSON.parse(productosData) 
+        : productosData;
       
       for (const item of productos) {
         const cantidadARestaurar = item.cantidad || 1;
@@ -936,14 +936,126 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
+// ✅ WEBHOOK WOMPI - AGREGAR ANTES DEL app.listen
+app.post('/webhook/wompi', express.raw({type: 'application/json'}), async (req, res) => {
+  try {
+    const eventBody = req.body.toString();
+    const event = JSON.parse(eventBody);
+    
+    console.log('🔔 Webhook WOMPI recibido:', {
+      type: event.event,
+      transaction_id: event.data?.transaction?.id,
+      status: event.data?.transaction?.status,
+      reference: event.data?.transaction?.reference
+    });
+    
+    if (event.event === 'transaction.updated') {
+      const transaction = event.data.transaction;
+      const status = transaction.status;
+      const reference = transaction.reference;
+      
+      const pedidoResult = await pool.query(
+        'SELECT id, productos FROM pedidos WHERE payment_reference = $1',
+        [reference]
+      );
+      
+      if (pedidoResult.rows.length > 0) {
+        const pedido = pedidoResult.rows[0];
+        
+        if (status === 'APPROVED') {
+          await pool.query(
+            'UPDATE pedidos SET payment_status = $1, payment_transaction_id = $2, estado = $3 WHERE id = $4',
+            ['APPROVED', transaction.id, 'pendiente', pedido.id]
+          );
+          console.log(`✅ Pedido ${pedido.id} marcado como pagado vía webhook`);
+          
+        } else if (status === 'DECLINED') {
+          await pool.query(
+            'UPDATE pedidos SET payment_status = $1, estado = $2 WHERE id = $3',
+            ['DECLINED', 'cancelado', pedido.id]
+          );
+          
+          // Restaurar stock
+          const productos = typeof pedido.productos === 'string' 
+            ? JSON.parse(pedido.productos) : pedido.productos;
+          for (const item of productos) {
+            await pool.query(
+              'UPDATE productos SET stock = stock + $1 WHERE id = $2',
+              [item.cantidad || 1, item.id]
+            );
+          }
+          console.log(`❌ Pedido ${pedido.id} cancelado y stock restaurado vía webhook`);
+        }
+      }
+    }
+    
+    res.status(200).json({ message: 'Webhook procesado' });
+  } catch (error) {
+    console.error('❌ Error en webhook:', error);
+    res.status(500).json({ error: 'Error procesando webhook' });
+  }
+});
 
-// 🚀 Iniciar servidor - ⚡ ACTUALIZADO
+// ✅ ENDPOINT PARA VERIFICAR PAGOS - AGREGAR DESPUÉS DEL WEBHOOK
+app.get('/api/verificar-pago/:transactionId', authenticateToken, async (req, res) => {
+  const { transactionId } = req.params;
+  
+  try {
+    console.log(`🔍 Verificando transacción: ${transactionId}`);
+    
+    // Buscar primero en nuestra base de datos
+    const pedidoLocal = await pool.query(
+      'SELECT * FROM pedidos WHERE payment_transaction_id = $1 OR payment_reference = $1',
+      [transactionId]
+    );
+    
+    if (pedidoLocal.rows.length > 0) {
+      const pedido = pedidoLocal.rows[0];
+      if (pedido.payment_status === 'APPROVED') {
+        return res.json({
+          status: 'APPROVED',
+          message: 'Pago ya confirmado en base de datos',
+          pedidoId: pedido.id
+        });
+      }
+    }
+    
+    // Si no está en BD, consultar WOMPI
+    const wompiResponse = await fetch(
+      `https://api.wompi.co/v1/transactions/${transactionId}`,
+      {
+        headers: {
+          'Authorization': `Bearer prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR`,
+          'Accept': 'application/json'
+        }
+      }
+    );
+    
+    if (wompiResponse.ok) {
+      const wompiData = await wompiResponse.json();
+      const status = wompiData.data?.status;
+      
+      res.json({
+        status: status || 'PENDING',
+        message: status === 'APPROVED' ? 'Pago confirmado' : 'En proceso',
+        reference: wompiData.data?.reference
+      });
+    } else {
+      res.json({ status: 'PENDING', message: 'Verificando...' });
+    }
+    
+  } catch (error) {
+    console.error('Error verificando pago:', error);
+    res.status(500).json({ status: 'ERROR', message: 'Error verificando pago' });
+  }
+});
+// 🚀 Iniciar servidor
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
-  console.log('🔐 Sistema de autenticación activado');
+  console.log('🔐 Sistema de autenticación SIN CONTRASEÑAS activado');
   console.log('🏢 Conjunto residencial: Torres 1, 2, 3, 4, 5');
   console.log('⚡ Entrega rápida: máximo 20 minutos');
-  console.log('📦 API de gestión de pedidos lista');
+  console.log('📦 Control de inventario con stock automático');
   console.log('💳 Sistema de tracking WOMPI integrado');
-  console.log('✅ Validaciones actualizadas para Torre 5');
+  console.log('✅ Backend corregido y funcional');
 });
