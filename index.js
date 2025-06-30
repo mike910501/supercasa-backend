@@ -936,13 +936,26 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
-// ✅ WEBHOOK WOMPI - AGREGAR ANTES DEL app.listen
-app.post('/webhook/wompi', express.raw({type: 'application/json'}), async (req, res) => {
+// ✅ WEBHOOK WOMPI CORREGIDO - REEMPLAZAR COMPLETAMENTE
+app.post('/webhook/wompi', express.json(), async (req, res) => {
   try {
-    const eventBody = req.body.toString();
-    const event = JSON.parse(eventBody);
+    console.log('🔔 Webhook WOMPI - Headers:', req.headers);
+    console.log('🔔 Webhook WOMPI - Body tipo:', typeof req.body);
+    console.log('🔔 Webhook WOMPI - Body:', req.body);
     
-    console.log('🔔 Webhook WOMPI recibido:', {
+    let event;
+    
+    // Manejar diferentes formatos de body
+    if (typeof req.body === 'string') {
+      event = JSON.parse(req.body);
+    } else if (typeof req.body === 'object') {
+      event = req.body;
+    } else {
+      console.error('❌ Formato de body no válido:', req.body);
+      return res.status(400).json({ error: 'Formato inválido' });
+    }
+    
+    console.log('🔔 Evento procesado:', {
       type: event.event,
       transaction_id: event.data?.transaction?.id,
       status: event.data?.transaction?.status,
@@ -953,43 +966,65 @@ app.post('/webhook/wompi', express.raw({type: 'application/json'}), async (req, 
       const transaction = event.data.transaction;
       const status = transaction.status;
       const reference = transaction.reference;
+      const transactionId = transaction.id;
       
+      console.log(`📦 Procesando transacción ${transactionId} - Estado: ${status}`);
+      
+      // Buscar pedido por referencia O por transaction_id
       const pedidoResult = await pool.query(
-        'SELECT id, productos FROM pedidos WHERE payment_reference = $1',
-        [reference]
+        'SELECT id, productos FROM pedidos WHERE payment_reference = $1 OR payment_transaction_id = $2',
+        [reference, transactionId]
       );
       
-      if (pedidoResult.rows.length > 0) {
-        const pedido = pedidoResult.rows[0];
+      if (pedidoResult.rows.length === 0) {
+        console.error(`❌ No se encontró pedido con referencia ${reference} o ID ${transactionId}`);
+        return res.status(200).json({ message: 'Pedido no encontrado, pero webhook procesado' });
+      }
+      
+      const pedido = pedidoResult.rows[0];
+      
+      if (status === 'APPROVED') {
+        console.log(`✅ Actualizando pedido ${pedido.id} como APROBADO`);
         
-        if (status === 'APPROVED') {
-          await pool.query(
-            'UPDATE pedidos SET payment_status = $1, payment_transaction_id = $2, estado = $3 WHERE id = $4',
-            ['APPROVED', transaction.id, 'pendiente', pedido.id]
-          );
-          console.log(`✅ Pedido ${pedido.id} marcado como pagado vía webhook`);
+        await pool.query(
+          `UPDATE pedidos SET 
+            payment_status = 'APPROVED',
+            payment_transaction_id = $1,
+            estado = 'pendiente'
+          WHERE id = $2`,
+          [transactionId, pedido.id]
+        );
+        
+        console.log(`✅ Pedido ${pedido.id} marcado como pagado vía webhook`);
+        
+      } else if (status === 'DECLINED') {
+        console.log(`❌ Pago rechazado para pedido ${pedido.id}`);
+        
+        await pool.query(
+          'UPDATE pedidos SET payment_status = $1, estado = $2 WHERE id = $3',
+          ['DECLINED', 'cancelado', pedido.id]
+        );
+        
+        // Restaurar stock
+        const productos = typeof pedido.productos === 'string' 
+          ? JSON.parse(pedido.productos) : pedido.productos;
           
-        } else if (status === 'DECLINED') {
+        for (const item of productos) {
           await pool.query(
-            'UPDATE pedidos SET payment_status = $1, estado = $2 WHERE id = $3',
-            ['DECLINED', 'cancelado', pedido.id]
+            'UPDATE productos SET stock = stock + $1 WHERE id = $2',
+            [item.cantidad || 1, item.id]
           );
-          
-          // Restaurar stock
-          const productos = typeof pedido.productos === 'string' 
-            ? JSON.parse(pedido.productos) : pedido.productos;
-          for (const item of productos) {
-            await pool.query(
-              'UPDATE productos SET stock = stock + $1 WHERE id = $2',
-              [item.cantidad || 1, item.id]
-            );
-          }
-          console.log(`❌ Pedido ${pedido.id} cancelado y stock restaurado vía webhook`);
         }
+        
+        console.log(`❌ Pedido ${pedido.id} cancelado y stock restaurado vía webhook`);
       }
     }
     
-    res.status(200).json({ message: 'Webhook procesado' });
+    res.status(200).json({ 
+      message: 'Webhook procesado exitosamente',
+      timestamp: new Date().toISOString()
+    });
+    
   } catch (error) {
     console.error('❌ Error en webhook:', error);
     res.status(500).json({ error: 'Error procesando webhook' });
