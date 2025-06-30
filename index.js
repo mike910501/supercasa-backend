@@ -1003,7 +1003,7 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
                 transaction.payment_method_type,
                 transactionId,
                 transaction.amount_in_cents,
-                'pendiente'
+                'Pendiente'
               ]
             );
             
