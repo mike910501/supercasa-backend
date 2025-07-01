@@ -154,18 +154,24 @@ function validarDatosResidenciales(torre, piso, apartamento) {
   return errores;
 }
 
-// 🛡️ Middleware de autenticación
+// 🛡️ Middleware de autenticación con mensajes amigables
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    return res.status(401).json({ error: 'Token de acceso requerido' });
+    return res.status(401).json({ 
+      error: 'Su sesión ha expirado. Por favor inicie sesión nuevamente.',
+      action: 'LOGIN_REQUIRED'
+    });
   }
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
-      return res.status(403).json({ error: 'Token inválido' });
+      return res.status(403).json({ 
+        error: 'Su sesión ha expirado. Por favor inicie sesión nuevamente.',
+        action: 'SESSION_EXPIRED'
+      });
     }
     req.user = user;
     next();
