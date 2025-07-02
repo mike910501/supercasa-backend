@@ -1085,7 +1085,7 @@ if (pedidoResult.rows.length === 0 && status === 'APPROVED') {
       // 🆕 INTENTAR RECUPERAR PRODUCTOS REALES
       let productosReales = [];
       
-        // 💾 NUEVO: RECUPERAR CARRITO REAL DESDE TABLA TEMPORAL
+// 💾 NUEVO: RECUPERAR CARRITO REAL DESDE TABLA TEMPORAL
 console.log(`💾 Buscando carrito temporal para referencia: ${reference}`);
 
 const carritoTemp = await pool.query(
@@ -1096,8 +1096,14 @@ const carritoTemp = await pool.query(
 if (carritoTemp.rows.length > 0) {
   console.log('✅ Carrito temporal encontrado');
   
-  const productosCarrito = JSON.parse(carritoTemp.rows[0].productos);
-  const datosEntrega = JSON.parse(carritoTemp.rows[0].datos_entrega);
+  // 🛠️ PARSING SEGURO
+  const productosCarrito = typeof carritoTemp.rows[0].productos === 'string' 
+    ? JSON.parse(carritoTemp.rows[0].productos) 
+    : carritoTemp.rows[0].productos;
+
+  const datosEntrega = typeof carritoTemp.rows[0].datos_entrega === 'string' 
+    ? JSON.parse(carritoTemp.rows[0].datos_entrega) 
+    : carritoTemp.rows[0].datos_entrega;
   
   // Usar productos reales del carrito
   for (const item of productosCarrito) {
@@ -1119,6 +1125,21 @@ if (carritoTemp.rows.length > 0) {
       console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${item.cantidad}`);
     }
   }
+  
+  // Actualizar datos de entrega si están disponibles
+  if (datosEntrega && datosEntrega.torre_entrega) {
+    usuario.torre = datosEntrega.torre_entrega;
+    usuario.piso = datosEntrega.piso_entrega;
+    usuario.apartamento = datosEntrega.apartamento_entrega;
+  }
+  
+  // Limpiar carrito temporal después de usar
+  await pool.query('DELETE FROM carrito_temporal WHERE referencia = $1', [reference]);
+  console.log('🗑️ Carrito temporal eliminado');
+  
+} else {
+  // ... resto del código fallback ...
+}
   
   // Actualizar datos de entrega si están disponibles
   if (datosEntrega.torre_entrega) {
