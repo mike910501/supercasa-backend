@@ -1106,7 +1106,7 @@ if (pedidoResult.rows.length === 0 && status === 'APPROVED') {
         }];
       }
       
-      // Crear pedido con productos reales
+   // Crear pedido con productos reales
       const pedidoWebhook = await pool.query(
         `INSERT INTO pedidos (
           usuario_id, productos, total, 
@@ -1131,6 +1131,29 @@ if (pedidoResult.rows.length === 0 && status === 'APPROVED') {
           'pendiente'
         ]
       );
+      
+      // ✅ REDUCIR STOCK DESPUÉS DE CREAR PEDIDO EXITOSO
+      console.log('📦 Reduciendo stock de productos...');
+      
+      for (const item of productosReales) {
+        // 🛡️ SOLO REDUCIR PRODUCTOS REALES (no webhook-generic)
+        if (item.id && typeof item.id === 'number' && !isNaN(item.id)) {
+          const cantidadSolicitada = item.cantidad || 1;
+          
+          await pool.query(
+            'UPDATE productos SET stock = GREATEST(stock - $1, 0) WHERE id = $2',
+            [cantidadSolicitada, item.id]
+          );
+          
+          console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${cantidadSolicitada}`);
+        } else {
+          console.log(`⚠️ Ignorando reducción de stock para producto falso: ${item.id}`);
+        }
+      }
+      
+      console.log('✅ Stock actualizado correctamente');
+      
+      console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con productos reales`);
       
       console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con productos reales`);
       
