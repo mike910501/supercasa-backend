@@ -1427,6 +1427,7 @@ app.get('/api/verificar-pedido-reciente', authenticateToken, async (req, res) =>
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
   console.log('🧪 TEST DEPLOY - Chat endpoint disponible');
+  console.log('🧪 veamos');
   console.log('🔐 Sistema de autenticación SIN CONTRASEÑAS activado');
   console.log('🏢 Conjunto residencial: Torres 1, 2, 3, 4, 5');
   console.log('⚡ Entrega rápida: máximo 20 minutos');
