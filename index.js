@@ -1269,6 +1269,78 @@ EJEMPLOS:
     });
   }
 });
+// 📊 Endpoint para consultar estado de pedidos desde chat
+app.get('/chat/pedido/:numero', authenticateToken, async (req, res) => {
+  try {
+    const { numero } = req.params;
+    
+    // Extraer ID del número (SUP-104 → 104)
+    const pedidoId = numero.replace(/SUP-/i, '').replace(/sup-/i, '');
+    
+    console.log(`🔍 Consultando pedido ${numero} (ID: ${pedidoId}) para usuario ${req.user.userId}`);
+    
+    const result = await pool.query(`
+      SELECT 
+        id, estado, fecha, total, productos,
+        torre_entrega, piso_entrega, apartamento_entrega,
+        fecha_entrega, payment_status,
+        EXTRACT(EPOCH FROM (NOW() - fecha))/60 as minutos_transcurridos
+      FROM pedidos 
+      WHERE id = $1 AND usuario_id = $2
+    `, [pedidoId, req.user.userId]);
+    
+    if (result.rows.length === 0) {
+      console.log(`❌ Pedido ${numero} no encontrado para usuario ${req.user.userId}`);
+      return res.json({ 
+        encontrado: false,
+        mensaje: `No encontré el pedido ${numero} en tu cuenta.`
+      });
+    }
+    
+    const pedido = result.rows[0];
+    const minutosTranscurridos = Math.round(pedido.minutos_transcurridos);
+    
+    // 🚨 LÓGICA DE ESCALAMIENTO
+    let necesitaEscalamiento = false;
+    let razonEscalamiento = '';
+    
+    if (pedido.estado === 'cancelado') {
+      necesitaEscalamiento = true;
+      razonEscalamiento = 'pedido_cancelado';
+    } else if (pedido.estado === 'pendiente' && minutosTranscurridos > 20) {
+      necesitaEscalamiento = true;
+      razonEscalamiento = 'tiempo_excedido';
+    }
+    
+    console.log(`✅ Pedido ${numero} encontrado:`, {
+      estado: pedido.estado,
+      minutos: minutosTranscurridos,
+      escalamiento: necesitaEscalamiento
+    });
+    
+    res.json({
+      encontrado: true,
+      id: pedido.id,
+      numero: `SUP-${pedido.id}`,
+      estado: pedido.estado,
+      fecha: pedido.fecha,
+      total: pedido.total,
+      direccion: `Torre ${pedido.torre_entrega}, Piso ${pedido.piso_entrega}, Apt ${pedido.apartamento_entrega}`,
+      minutos_transcurridos: minutosTranscurridos,
+      fecha_entrega: pedido.fecha_entrega,
+      payment_status: pedido.payment_status,
+      necesita_escalamiento: necesitaEscalamiento,
+      razon_escalamiento: razonEscalamiento
+    });
+    
+  } catch (error) {
+    console.error('❌ Error consultando pedido desde chat:', error);
+    res.status(500).json({ 
+      encontrado: false,
+      error: 'Error consultando pedido' 
+    });
+  }
+});
 
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
