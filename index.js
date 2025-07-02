@@ -1383,6 +1383,46 @@ app.get('/chat/pedido/:numero', authenticateToken, async (req, res) => {
   }
 });
 
+// 🆕 NUEVO: Verificar si el usuario tiene pedidos recientes
+app.get('/api/verificar-pedido-reciente', authenticateToken, async (req, res) => {
+  try {
+    const { referencia } = req.query;
+    
+    console.log(`🔍 Verificando pedido reciente para usuario ${req.user.userId}`);
+    
+    // Buscar pedidos de los últimos 10 minutos del usuario
+    const result = await pool.query(`
+      SELECT id, payment_reference, payment_transaction_id, payment_status, total, fecha
+      FROM pedidos 
+      WHERE usuario_id = $1 
+      AND fecha > NOW() - INTERVAL '10 minutes'
+      AND (payment_status = 'APPROVED' OR estado != 'cancelado')
+      ORDER BY fecha DESC 
+      LIMIT 1
+    `, [req.user.userId]);
+    
+    if (result.rows.length > 0) {
+      const pedido = result.rows[0];
+      console.log(`✅ Pedido reciente encontrado: ${pedido.id}`);
+      
+      return res.json({
+        found: true,
+        pedidoId: pedido.id,
+        payment_status: pedido.payment_status,
+        total: pedido.total,
+        fecha: pedido.fecha
+      });
+    }
+    
+    console.log('❌ No se encontró pedido reciente');
+    res.json({ found: false });
+    
+  } catch (error) {
+    console.error('❌ Error verificando pedido reciente:', error);
+    res.status(500).json({ found: false, error: 'Error interno' });
+  }
+});
+
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
