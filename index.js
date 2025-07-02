@@ -1154,6 +1154,7 @@ app.get('/api/verificar-pago/:transactionId', authenticateToken, async (req, res
     res.status(500).json({ status: 'ERROR', message: 'Error verificando pago' });
   }
 });
+
 // ===================
 // 💬 CHAT CON CHATGPT
 // ===================
@@ -1224,7 +1225,51 @@ EJEMPLOS:
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
       },
       body: JSON.stringify({
-        mod
+        model: 'gpt-3.5-turbo',
+        messages: messages,
+        max_tokens: 150,
+        temperature: 0.7,
+        presence_penalty: 0.1
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error('❌ Error OpenAI:', error);
+      throw new Error(`OpenAI Error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const respuestaIA = data.choices[0].message.content.trim();
+
+    console.log('✅ Respuesta ChatGPT:', respuestaIA);
+
+    res.json({ 
+      respuesta: respuestaIA,
+      tokens_usados: data.usage?.total_tokens || 0
+    });
+
+  } catch (error) {
+    console.error('❌ Error en chat:', error);
+    
+    // 🔄 RESPUESTA DE FALLBACK
+    const respuestasFallback = [
+      "¡Hola! Soy el asistente de Supercasa 🏠 ¿En qué puedo ayudarte?",
+      "Disculpa, tuve un problemita técnico 😅 ¿Puedes repetir tu pregunta?",
+      "¡Estoy aquí para ayudarte con Supercasa! 🛒 ¿Qué necesitas saber?",
+      "Lo siento, no pude procesar eso. ¿Me ayudas reformulando tu pregunta? 🤔",
+      "¡Hola! Pregúntame sobre productos, pagos o entregas de Supercasa 🚀"
+    ];
+    
+    const respuestaAleatoria = respuestasFallback[Math.floor(Math.random() * respuestasFallback.length)];
+    
+    res.json({ 
+      respuesta: respuestaAleatoria,
+      error: 'fallback'
+    });
+  }
+});
+
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
