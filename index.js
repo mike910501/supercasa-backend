@@ -34,7 +34,7 @@ pool.query(`
 `).then(() => console.log("✅ Tabla 'usuarios' lista"))
   .catch(err => console.error("❌ Error creando tabla usuarios:", err));
 
-// ✅ Crear tabla productos
+// ✅ Crear tabla product
 pool.query(`
   CREATE TABLE IF NOT EXISTS productos (
     id SERIAL PRIMARY KEY,
@@ -1157,6 +1157,7 @@ app.get('/api/verificar-pago/:transactionId', authenticateToken, async (req, res
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
+  console.log('🧪 TEST DEPLOY - Chat endpoint disponible');
   console.log('🔐 Sistema de autenticación SIN CONTRASEÑAS activado');
   console.log('🏢 Conjunto residencial: Torres 1, 2, 3, 4, 5');
   console.log('⚡ Entrega rápida: máximo 20 minutos');
