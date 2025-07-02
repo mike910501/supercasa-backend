@@ -618,6 +618,41 @@ app.post('/orders', authenticateToken, async (req, res) => {
   }
 });
 
+// 💾 GUARDAR CARRITO TEMPORAL ANTES DEL PAGO
+app.post('/api/guardar-carrito-temporal', authenticateToken, async (req, res) => {
+  try {
+    const { referencia, productos, datos_entrega } = req.body;
+    
+    console.log(`💾 Guardando carrito temporal para referencia: ${referencia}`);
+    
+    // Eliminar carrito anterior si existe
+    await pool.query(
+      'DELETE FROM carrito_temporal WHERE referencia = $1',
+      [referencia]
+    );
+    
+    // Guardar nuevo carrito
+    await pool.query(
+      `INSERT INTO carrito_temporal (referencia, usuario_id, productos, datos_entrega) 
+       VALUES ($1, $2, $3, $4)`,
+      [
+        referencia,
+        req.user.userId,
+        JSON.stringify(productos),
+        JSON.stringify(datos_entrega)
+      ]
+    );
+    
+    console.log(`✅ Carrito temporal guardado: ${productos.length} productos`);
+    
+    res.json({ success: true, message: 'Carrito guardado temporalmente' });
+    
+  } catch (error) {
+    console.error('❌ Error guardando carrito temporal:', error);
+    res.status(500).json({ error: 'Error guardando carrito temporal' });
+  }
+});
+
 // 📄 Obtener pedidos con información de entrega
 app.get('/orders', authenticateToken, async (req, res) => {
   try {
@@ -1050,116 +1085,134 @@ if (pedidoResult.rows.length === 0 && status === 'APPROVED') {
       // 🆕 INTENTAR RECUPERAR PRODUCTOS REALES
       let productosReales = [];
       
-      // 🎯 BUSCAR PRODUCTOS MÁS VENDIDOS PARA ESTIMAR
-      const productosPopulares = await pool.query(`
-        SELECT p.id, p.nombre, p.precio, p.stock
-        FROM productos p
-        WHERE p.stock > 0
-        ORDER BY p.id ASC
-        LIMIT 3
-      `);
-      
-      if (productosPopulares.rows.length > 0) {
-        // Usar productos reales disponibles
-        const montoTotal = transaction.amount_in_cents / 100;
-        let montoRestante = montoTotal;
-        
-        for (const producto of productosPopulares.rows) {
-          if (montoRestante <= 0) break;
-          
-          const cantidad = Math.min(
-            Math.floor(montoRestante / producto.precio), 
-            producto.stock,
-            3 // máximo 3 unidades por producto
-          );
-          
-          if (cantidad > 0) {
-            productosReales.push({
-              id: producto.id,
-              nombre: producto.nombre,
-              precio: producto.precio,
-              cantidad: cantidad,
-              codigo: `AUTO-${producto.id}`
-            });
-            
-            montoRestante -= (producto.precio * cantidad);
-            
-            // 🆕 REDUCIR STOCK INMEDIATAMENTE
-            await pool.query(
-              'UPDATE productos SET stock = GREATEST(stock - $1, 0) WHERE id = $2',
-              [cantidad, producto.id]
-            );
-            
-            console.log(`📉 Stock reducido: Producto ID ${producto.id}, cantidad: ${cantidad}`);
-          }
-        }
-      }
-      
-      // Si no se pudo crear productos reales, usar uno genérico SIN reducir stock
-      if (productosReales.length === 0) {
-        productosReales = [{
-          id: 'webhook-generic',
-          nombre: 'Pedido procesado por webhook',
-          cantidad: 1,
-          precio: transaction.amount_in_cents / 100,
-          codigo: 'WEBHOOK-AUTO'
-        }];
-      }
-      
-   // Crear pedido con productos reales
-      const pedidoWebhook = await pool.query(
-        `INSERT INTO pedidos (
-          usuario_id, productos, total, 
-          torre_entrega, piso_entrega, apartamento_entrega,
-          telefono_contacto, payment_reference, payment_status,
-          payment_method, payment_transaction_id, payment_amount_cents, estado
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
-        RETURNING id`,
-        [
-          usuario.id,
-          JSON.stringify(productosReales),
-          transaction.amount_in_cents / 100,
-          usuario.torre,
-          usuario.piso, 
-          usuario.apartamento,
-          'Webhook auto',
-          reference,
-          'APPROVED',
-          transaction.payment_method_type,
-          transactionId,
-          transaction.amount_in_cents,
-          'pendiente'
-        ]
+        // 💾 NUEVO: RECUPERAR CARRITO REAL DESDE TABLA TEMPORAL
+console.log(`💾 Buscando carrito temporal para referencia: ${reference}`);
+
+const carritoTemp = await pool.query(
+  'SELECT productos, datos_entrega FROM carrito_temporal WHERE referencia = $1',
+  [reference]
+);
+
+if (carritoTemp.rows.length > 0) {
+  console.log('✅ Carrito temporal encontrado');
+  
+  const productosCarrito = JSON.parse(carritoTemp.rows[0].productos);
+  const datosEntrega = JSON.parse(carritoTemp.rows[0].datos_entrega);
+  
+  // Usar productos reales del carrito
+  for (const item of productosCarrito) {
+    productosReales.push({
+      id: item.id,
+      nombre: item.nombre,
+      precio: item.precio,
+      cantidad: item.cantidad,
+      codigo: item.codigo || `TEMP-${item.id}`
+    });
+    
+    // 🆕 REDUCIR STOCK DE PRODUCTOS REALES
+    if (item.id && !isNaN(parseInt(item.id))) {
+      await pool.query(
+        'UPDATE productos SET stock = GREATEST(stock - $1, 0) WHERE id = $2',
+        [item.cantidad, item.id]
       );
       
-      // ✅ REDUCIR STOCK DESPUÉS DE CREAR PEDIDO EXITOSO
-      console.log('📦 Reduciendo stock de productos...');
-      
-      for (const item of productosReales) {
-        // 🛡️ SOLO REDUCIR PRODUCTOS REALES (no webhook-generic)
-        if (item.id && typeof item.id === 'number' && !isNaN(item.id)) {
-          const cantidadSolicitada = item.cantidad || 1;
-          
-          await pool.query(
-            'UPDATE productos SET stock = GREATEST(stock - $1, 0) WHERE id = $2',
-            [cantidadSolicitada, item.id]
-          );
-          
-          console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${cantidadSolicitada}`);
-        } else {
-          console.log(`⚠️ Ignorando reducción de stock para producto falso: ${item.id}`);
-        }
-      }
-      
-      console.log('✅ Stock actualizado correctamente');
-      
-      console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con productos reales`);
-      
-      console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con productos reales`);
-      
-    } else {
-      console.log(`❌ Usuario no encontrado para email ${transaction.customer_email}`);
+      console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${item.cantidad}`);
     }
+  }
+  
+  // Actualizar datos de entrega si están disponibles
+  if (datosEntrega.torre_entrega) {
+    usuario.torre = datosEntrega.torre_entrega;
+    usuario.piso = datosEntrega.piso_entrega;
+    usuario.apartamento = datosEntrega.apartamento_entrega;
+  }
+  
+  // Limpiar carrito temporal después de usar
+  await pool.query('DELETE FROM carrito_temporal WHERE referencia = $1', [reference]);
+  console.log('🗑️ Carrito temporal eliminado');
+  
+} else {
+  console.log('⚠️ No se encontró carrito temporal, usando productos estimados...');
+  
+  // FALLBACK: Código original de productos estimados
+  const productosPopulares = await pool.query(`
+    SELECT p.id, p.nombre, p.precio, p.stock
+    FROM productos p
+    WHERE p.stock > 0
+    ORDER BY p.id ASC
+    LIMIT 3
+  `);
+  
+  if (productosPopulares.rows.length > 0) {
+    const montoTotal = transaction.amount_in_cents / 100;
+    let montoRestante = montoTotal;
+    
+    for (const producto of productosPopulares.rows) {
+      if (montoRestante <= 0) break;
+      
+      const cantidad = Math.min(
+        Math.floor(montoRestante / producto.precio), 
+        producto.stock,
+        3
+      );
+      
+      if (cantidad > 0) {
+        productosReales.push({
+          id: producto.id,
+          nombre: producto.nombre,
+          precio: producto.precio,
+          cantidad: cantidad,
+          codigo: `AUTO-${producto.id}`
+        });
+        
+        montoRestante -= (producto.precio * cantidad);
+      }
+    }
+  }
+  
+  // Si no se pudo crear productos reales, usar uno genérico
+  if (productosReales.length === 0) {
+    productosReales = [{
+      id: 'webhook-generic',
+      nombre: 'Pedido procesado por webhook',
+      cantidad: 1,
+      precio: transaction.amount_in_cents / 100,
+      codigo: 'WEBHOOK-AUTO'
+    }];
+  }
+}
+      
+ // Crear pedido con productos reales
+const pedidoWebhook = await pool.query(
+  `INSERT INTO pedidos (
+    usuario_id, productos, total, 
+    torre_entrega, piso_entrega, apartamento_entrega,
+    telefono_contacto, payment_reference, payment_status,
+    payment_method, payment_transaction_id, payment_amount_cents, estado
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
+  RETURNING id`,
+  [
+    usuario.id,
+    JSON.stringify(productosReales),
+    transaction.amount_in_cents / 100,
+    usuario.torre,
+    usuario.piso, 
+    usuario.apartamento,
+    'Webhook auto',
+    reference,
+    'APPROVED',
+    transaction.payment_method_type,
+    transactionId,
+    transaction.amount_in_cents,
+    'pendiente'
+  ]
+);
+
+console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con productos reales`);
+
+} else {
+  console.log(`❌ Usuario no encontrado para email ${transaction.customer_email}`);
+}
     
   } catch (createError) {
     console.error('❌ Error creando pedido desde webhook:', createError);
