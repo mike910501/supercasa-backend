@@ -1154,6 +1154,77 @@ app.get('/api/verificar-pago/:transactionId', authenticateToken, async (req, res
     res.status(500).json({ status: 'ERROR', message: 'Error verificando pago' });
   }
 });
+// ===================
+// 💬 CHAT CON CHATGPT
+// ===================
+
+// 💬 Endpoint para chat con ChatGPT
+app.post('/chat', async (req, res) => {
+  try {
+    const { mensaje, historial = [] } = req.body;
+
+    if (!mensaje || mensaje.trim() === '') {
+      return res.status(400).json({ error: 'Mensaje es requerido' });
+    }
+
+    // 🎯 PROMPT ESPECÍFICO PARA SUPERCASA
+    const systemPrompt = `Eres el asistente de Supercasa, un e-commerce para conjunto residencial en Colombia.
+
+INFORMACIÓN CLAVE:
+- Entrega máximo 20 minutos dentro del conjunto
+- Pagos: Nequi, PSE, tarjetas de crédito/débito y efectivo
+- Horario: 7AM a 10PM todos los días
+- Torres: 1, 2, 3, 4, 5 (pisos 1-30)
+- Productos: mercado, aseo, bebidas, snacks
+- Sin costo de domicilio dentro del conjunto
+
+INSTRUCCIONES:
+- Respuestas cortas y amigables (máximo 2 líneas)
+- Usa emojis cuando sea apropiado
+- Si preguntan por productos específicos, recomienda usar el buscador
+- Para pedidos, guía hacia el carrito
+- Siempre menciona la entrega rápida de 20 minutos
+- Si no sabes algo específico, sé honesto pero mantén el tono amigable
+
+EJEMPLOS:
+- "¿Qué productos tienen?" → "Tenemos productos de mercado, aseo, bebidas y snacks 🛒 Usa el buscador para encontrar algo específico. ¡Entrega en máximo 20 minutos!"
+- "¿Cuánto cuesta el domicilio?" → "¡El domicilio es GRATIS dentro del conjunto! 🚀 Solo pagas los productos."
+- "¿Cómo pago?" → "Aceptamos Nequi, PSE, tarjetas y efectivo 💳 El pago es súper fácil y seguro."`;
+
+    // 🧠 CONSTRUIR CONTEXTO DE CONVERSACIÓN
+    const messages = [
+      { role: 'system', content: systemPrompt }
+    ];
+
+    // Agregar historial reciente (máximo últimos 6 mensajes)
+    const historialReciente = historial.slice(-6);
+    historialReciente.forEach(msg => {
+      messages.push({
+        role: msg.de === 'usuario' ? 'user' : 'assistant',
+        content: msg.texto
+      });
+    });
+
+    // Agregar mensaje actual
+    messages.push({
+      role: 'user',
+      content: mensaje
+    });
+
+    console.log('🤖 Enviando a ChatGPT:', {
+      mensajes: messages.length,
+      ultimoMensaje: mensaje
+    });
+
+    // 🌐 LLAMADA A OPENAI
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        mod
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
