@@ -928,6 +928,7 @@ app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) 
   }
 });
 
+
 // 🔄 Actualizar estado del pedido + RESTAURAR STOCK
 app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -965,14 +966,31 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
         : productosData;
       
       for (const item of productos) {
-        const cantidadARestaurar = item.cantidad || 1;
+        // 🛡️ IGNORAR PRODUCTOS CON IDs FALSOS
+        if (!item.id || 
+            typeof item.id === 'string' && (
+              item.id.includes('webhook') || 
+              item.id.includes('generic') ||
+              item.id.includes('auto') ||
+              isNaN(parseInt(item.id))
+            )) {
+          console.log(`⚠️ Ignorando producto falso: ${item.id} - ${item.nombre}`);
+          continue;
+        }
         
-        await pool.query(
-          'UPDATE productos SET stock = stock + $1 WHERE id = $2',
-          [cantidadARestaurar, item.id]
-        );
-        
-        console.log(`📈 Stock restaurado: Producto ID ${item.id}, cantidad: +${cantidadARestaurar}`);
+        // ✅ SOLO RESTAURAR PRODUCTOS REALES
+        try {
+          const cantidadARestaurar = item.cantidad || 1;
+          
+          await pool.query(
+            'UPDATE productos SET stock = stock + $1 WHERE id = $2',
+            [cantidadARestaurar, parseInt(item.id)]
+          );
+          
+          console.log(`📈 Stock restaurado: Producto ID ${item.id}, cantidad: +${cantidadARestaurar}`);
+        } catch (error) {
+          console.error(`❌ Error restaurando stock para producto ${item.id}:`, error.message);
+        }
       }
       
       console.log('✅ Stock restaurado completamente');
@@ -988,6 +1006,8 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
+
+
 // ✅ WEBHOOK WOMPI INTELIGENTE - REEMPLAZAR COMPLETAMENTE
 app.post('/webhook/wompi', express.json(), async (req, res) => {
   try {
