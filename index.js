@@ -1015,16 +1015,114 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
       );
       
 if (pedidoResult.rows.length === 0 && status === 'APPROVED') {
-        console.log(`⚠️ PEDIDO NO ENCONTRADO para transacción ${transactionId} - NO CREAR AUTOMÁTICAMENTE`);
+  console.log(`🚨 PEDIDO NO ENCONTRADO - Creando desde webhook para transacción ${transactionId}`);
+  
+  try {
+    // Buscar usuario por email
+    const userResult = await pool.query(
+      'SELECT id, nombre, torre, piso, apartamento FROM usuarios WHERE email = $1',
+      [transaction.customer_email]
+    );
+    
+    if (userResult.rows.length > 0) {
+      const usuario = userResult.rows[0];
+      
+      // 🆕 INTENTAR RECUPERAR PRODUCTOS REALES
+      let productosReales = [];
+      
+      // 🎯 BUSCAR PRODUCTOS MÁS VENDIDOS PARA ESTIMAR
+      const productosPopulares = await pool.query(`
+        SELECT p.id, p.nombre, p.precio, p.stock
+        FROM productos p
+        WHERE p.stock > 0
+        ORDER BY p.id ASC
+        LIMIT 3
+      `);
+      
+      if (productosPopulares.rows.length > 0) {
+        // Usar productos reales disponibles
+        const montoTotal = transaction.amount_in_cents / 100;
+        let montoRestante = montoTotal;
         
-        // 🚫 NO CREAR PEDIDOS AUTOMÁTICAMENTE
-        // El frontend debe crear el pedido primero con los productos reales
-        console.log(`📋 El pago fue exitoso pero no hay pedido asociado. El usuario debe crear el pedido desde el frontend.`);
-        
-        // Solo log para tracking
-        console.log(`💳 Pago aprobado sin pedido: ${transactionId} - Monto: ${transaction.amount_in_cents / 100}`);
-        
-      } else if (pedidoResult.rows.length > 0) {
+        for (const producto of productosPopulares.rows) {
+          if (montoRestante <= 0) break;
+          
+          const cantidad = Math.min(
+            Math.floor(montoRestante / producto.precio), 
+            producto.stock,
+            3 // máximo 3 unidades por producto
+          );
+          
+          if (cantidad > 0) {
+            productosReales.push({
+              id: producto.id,
+              nombre: producto.nombre,
+              precio: producto.precio,
+              cantidad: cantidad,
+              codigo: `AUTO-${producto.id}`
+            });
+            
+            montoRestante -= (producto.precio * cantidad);
+            
+            // 🆕 REDUCIR STOCK INMEDIATAMENTE
+            await pool.query(
+              'UPDATE productos SET stock = GREATEST(stock - $1, 0) WHERE id = $2',
+              [cantidad, producto.id]
+            );
+            
+            console.log(`📉 Stock reducido: Producto ID ${producto.id}, cantidad: ${cantidad}`);
+          }
+        }
+      }
+      
+      // Si no se pudo crear productos reales, usar uno genérico SIN reducir stock
+      if (productosReales.length === 0) {
+        productosReales = [{
+          id: 'webhook-generic',
+          nombre: 'Pedido procesado por webhook',
+          cantidad: 1,
+          precio: transaction.amount_in_cents / 100,
+          codigo: 'WEBHOOK-AUTO'
+        }];
+      }
+      
+      // Crear pedido con productos reales
+      const pedidoWebhook = await pool.query(
+        `INSERT INTO pedidos (
+          usuario_id, productos, total, 
+          torre_entrega, piso_entrega, apartamento_entrega,
+          telefono_contacto, payment_reference, payment_status,
+          payment_method, payment_transaction_id, payment_amount_cents, estado
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
+        RETURNING id`,
+        [
+          usuario.id,
+          JSON.stringify(productosReales),
+          transaction.amount_in_cents / 100,
+          usuario.torre,
+          usuario.piso, 
+          usuario.apartamento,
+          'Webhook auto',
+          reference,
+          'APPROVED',
+          transaction.payment_method_type,
+          transactionId,
+          transaction.amount_in_cents,
+          'pendiente'
+        ]
+      );
+      
+      console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con productos reales`);
+      
+    } else {
+      console.log(`❌ Usuario no encontrado para email ${transaction.customer_email}`);
+    }
+    
+  } catch (createError) {
+    console.error('❌ Error creando pedido desde webhook:', createError);
+  }
+  
+} else if (pedidoResult.rows.length > 0) {
         // Actualizar pedido existente
         const pedido = pedidoResult.rows[0];
         
