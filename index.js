@@ -394,6 +394,42 @@ app.get('/productos', async (_, res) => {
   }
 });
 
+// 🆕 NUEVO: Buscar productos por categoría/nombre para Luna
+app.get('/productos/buscar/:termino', async (req, res) => {
+  try {
+    const { termino } = req.params;
+    
+    console.log('🔍 Luna buscando productos:', termino);
+    
+    const result = await pool.query(`
+      SELECT id, nombre, precio, categoria, stock, codigo
+      FROM productos 
+      WHERE (
+        LOWER(nombre) LIKE LOWER($1) OR 
+        LOWER(categoria) LIKE LOWER($1)
+      ) AND stock > 0
+      ORDER BY stock DESC, precio ASC
+      LIMIT 5
+    `, [`%${termino}%`]);
+    
+    res.json({
+      encontrados: result.rows.length > 0,
+      productos: result.rows,
+      cantidad: result.rows.length,
+      termino_buscado: termino
+    });
+    
+  } catch (error) {
+    console.error('❌ Error buscando productos:', error);
+    res.status(500).json({ 
+      encontrados: false, 
+      productos: [], 
+      cantidad: 0,
+      error: 'Error interno del servidor' 
+    });
+  }
+});
+
 // 🗑️ Eliminar producto (solo admin)
 app.delete('/productos/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
