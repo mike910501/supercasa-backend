@@ -1168,7 +1168,6 @@ app.post('/chat', async (req, res) => {
       return res.status(400).json({ error: 'Mensaje es requerido' });
     }
 
-    // 🎯 PROMPT ESPECÍFICO PARA SUPERCASA
     const systemPrompt = `Eres el asistente de Supercasa, un e-commerce para conjunto residencial en Colombia.
 
 INFORMACIÓN CLAVE:
@@ -1186,6 +1185,12 @@ INSTRUCCIONES:
 - Para pedidos, guía hacia el carrito
 - Siempre menciona la entrega rápida de 20 minutos
 - Si no sabes algo específico, sé honesto pero mantén el tono amigable
+
+🚨 IMPORTANTE - CONSULTAS DE PEDIDOS:
+- NUNCA inventes información sobre pedidos específicos (SUP-123, etc.)
+- Si preguntan por pedidos específicos, di: "Para consultar pedidos específicos, usa el botón 'Mi Historial' o dime el número exacto"
+- NO digas que verificarás pedidos, el sistema ya lo maneja automáticamente
+- NO inventes estados, tiempos de entrega o información de pedidos
 
 EJEMPLOS:
 - "¿Qué productos tienen?" → "Tenemos productos de mercado, aseo, bebidas y snacks 🛒 Usa el buscador para encontrar algo específico. ¡Entrega en máximo 20 minutos!"
