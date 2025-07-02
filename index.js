@@ -1014,60 +1014,15 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
         [reference, transactionId]
       );
       
-      if (pedidoResult.rows.length === 0 && status === 'APPROVED') {
-        console.log(`🚨 PEDIDO NO ENCONTRADO - Creando desde webhook para transacción ${transactionId}`);
+if (pedidoResult.rows.length === 0 && status === 'APPROVED') {
+        console.log(`⚠️ PEDIDO NO ENCONTRADO para transacción ${transactionId} - NO CREAR AUTOMÁTICAMENTE`);
         
-        // ✅ CREAR PEDIDO DESDE WEBHOOK
-        try {
-          // Buscar usuario por email (usando el email de la transacción)
-          const userResult = await pool.query(
-            'SELECT id, nombre, torre, piso, apartamento FROM usuarios WHERE email = $1',
-            [transaction.customer_email]
-          );
-          
-          if (userResult.rows.length > 0) {
-            const usuario = userResult.rows[0];
-            
-            // Crear pedido básico desde webhook
-            const pedidoWebhook = await pool.query(
-              `INSERT INTO pedidos (
-                usuario_id, productos, total, 
-                torre_entrega, piso_entrega, apartamento_entrega,
-                telefono_contacto, payment_reference, payment_status,
-                payment_method, payment_transaction_id, payment_amount_cents, estado
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
-              RETURNING id`,
-              [
-                usuario.id,
-                JSON.stringify([{
-                  id: 'webhook',
-                  nombre: 'Producto desde webhook',
-                  cantidad: 1,
-                  precio: transaction.amount_in_cents / 100
-                }]),
-                transaction.amount_in_cents / 100,
-                usuario.torre,
-                usuario.piso, 
-                usuario.apartamento,
-                'N/A',
-                reference,
-                'APPROVED',
-                transaction.payment_method_type,
-                transactionId,
-                transaction.amount_in_cents,
-                'Pendiente'
-              ]
-            );
-            
-            console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook para usuario ${usuario.nombre}`);
-            
-          } else {
-            console.log(`❌ Usuario no encontrado para email ${transaction.customer_email}`);
-          }
-          
-        } catch (createError) {
-          console.error('❌ Error creando pedido desde webhook:', createError);
-        }
+        // 🚫 NO CREAR PEDIDOS AUTOMÁTICAMENTE
+        // El frontend debe crear el pedido primero con los productos reales
+        console.log(`📋 El pago fue exitoso pero no hay pedido asociado. El usuario debe crear el pedido desde el frontend.`);
+        
+        // Solo log para tracking
+        console.log(`💳 Pago aprobado sin pedido: ${transactionId} - Monto: ${transaction.amount_in_cents / 100}`);
         
       } else if (pedidoResult.rows.length > 0) {
         // Actualizar pedido existente
