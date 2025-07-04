@@ -1578,6 +1578,51 @@ app.get('/api/verificar-pedido-reciente', authenticateToken, async (req, res) =>
   }
 });
 
+// ===== TEST WOMPI API DIRECTA =====
+app.get('/test-wompi-api', async (req, res) => {
+  try {
+    console.log('🧪 Iniciando test WOMPI API Directa...');
+    
+    // Verificar que las claves están disponibles
+    const PUBLIC_KEY = 'pub_prod_GkQ7DyAjNXb63f1Imr9OQ1YNHLXd89FT';
+    const PRIVATE_KEY = 'prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR';
+    
+    console.log('🔑 Public key:', PUBLIC_KEY ? 'ENCONTRADA' : 'FALTANTE');
+    console.log('🔑 Private key:', PRIVATE_KEY ? 'ENCONTRADA' : 'FALTANTE');
+    
+    // Test 1: Llamar endpoint merchant (lo que falla en el widget)
+    const merchantUrl = `https://api.wompi.co/v1/merchants/${PUBLIC_KEY}`;
+    console.log('🌐 Llamando:', merchantUrl);
+    
+    const merchantResponse = await fetch(merchantUrl);
+    const merchantData = await merchantResponse.json();
+    
+    console.log('📊 Status:', merchantResponse.status);
+    console.log('📊 Response:', merchantData);
+    
+    // Respuesta del test
+    res.json({
+      timestamp: new Date().toISOString(),
+      test_name: 'WOMPI API Directa - Merchant Check',
+      merchant_url: merchantUrl,
+      status_code: merchantResponse.status,
+      success: merchantResponse.ok,
+      merchant_data: merchantData,
+      keys_present: {
+        public: !!PUBLIC_KEY,
+        private: !!PRIVATE_KEY
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error en test WOMPI:', error.message);
+    res.status(500).json({ 
+      error: error.message,
+      stack: error.stack 
+    });
+  }
+});
+
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
