@@ -190,7 +190,6 @@ const requireAdmin = (req, res, next) => {
 // 🔐 RUTAS DE AUTENTICACIÓN
 // ===================
 
-// 📝 Registro de usuario SIN CONTRASEÑA - ✅ CORREGIDO
 app.post('/auth/register', async (req, res) => {
   const { 
     nombre, 
@@ -201,7 +200,10 @@ app.post('/auth/register', async (req, res) => {
     torre, 
     piso, 
     apartamento,
-    notas_entrega 
+    notas_entrega,
+    // ✅ NUEVOS CAMPOS PARA POLÍTICA DE DATOS
+    privacy_accepted,
+    marketing_accepted
   } = req.body;
 
   try {
@@ -212,6 +214,13 @@ app.post('/auth/register', async (req, res) => {
 
     if (!nombre || !email || !cedula || !telefono) {
       return res.status(400).json({ error: 'Nombre, email, cédula y teléfono son obligatorios' });
+    }
+
+    // ✅ VALIDACIÓN OBLIGATORIA DE POLÍTICA DE DATOS
+    if (!privacy_accepted) {
+      return res.status(400).json({ 
+        error: 'Debe aceptar la política de tratamiento de datos personales para registrarse' 
+      });
     }
 
     // ✅ CORREGIDO: Normalizar email
@@ -227,13 +236,41 @@ app.post('/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'La cédula ya está registrada' });
     }
 
+    // ✅ DATOS DE POLÍTICA CON TIMESTAMP Y VERSIÓN
+    const ahora = new Date();
+    const privacyData = {
+      privacy_accepted: true,
+      privacy_date: ahora,
+      privacy_version: '1.0',
+      marketing_accepted: marketing_accepted || false,
+      marketing_date: marketing_accepted ? ahora : null
+    };
+
     const result = await pool.query(
       `INSERT INTO usuarios (
         nombre, email, cedula, telefono, telefono_alternativo, 
-        torre, piso, apartamento, notas_entrega
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
-      RETURNING id, nombre, email, cedula, telefono, torre, piso, apartamento, rol`,
-      [nombre, emailNormalizado, cedula, telefono, telefono_alternativo, torre, piso, apartamento, notas_entrega]
+        torre, piso, apartamento, notas_entrega,
+        privacy_accepted, privacy_date, privacy_version,
+        marketing_accepted, marketing_date
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) 
+      RETURNING id, nombre, email, cedula, telefono, torre, piso, apartamento, rol,
+               privacy_accepted, privacy_date, marketing_accepted`,
+      [
+        nombre, 
+        emailNormalizado, 
+        cedula, 
+        telefono, 
+        telefono_alternativo, 
+        torre, 
+        piso, 
+        apartamento, 
+        notas_entrega,
+        privacyData.privacy_accepted,
+        privacyData.privacy_date,
+        privacyData.privacy_version,
+        privacyData.marketing_accepted,
+        privacyData.marketing_date
+      ]
     );
 
     const user = result.rows[0];
@@ -247,6 +284,16 @@ app.post('/auth/register', async (req, res) => {
       JWT_SECRET, 
       { expiresIn: '24h' }
     );
+
+    // ✅ LOG PARA AUDITORÍA DE REGISTRO CON DATOS DE PRIVACIDAD
+    console.log(`✅ REGISTRO EXITOSO:`, {
+      user_id: user.id,
+      email: user.email,
+      privacy_accepted: user.privacy_accepted,
+      privacy_date: user.privacy_date,
+      marketing_accepted: user.marketing_accepted,
+      timestamp: new Date().toISOString()
+    });
 
     res.status(201).json({
       success: true,
@@ -262,11 +309,22 @@ app.post('/auth/register', async (req, res) => {
         piso: user.piso,
         apartamento: user.apartamento,
         direccion: `Torre ${user.torre}, Piso ${user.piso}, Apt ${user.apartamento}`,
-        rol: user.rol
+        rol: user.rol,
+        // ✅ INCLUIR DATOS DE PRIVACIDAD EN RESPUESTA
+        privacy_accepted: user.privacy_accepted,
+        marketing_accepted: user.marketing_accepted
       }
     });
   } catch (err) {
-    console.error('Error en registro:', err);
+    console.error('❌ Error en registro:', err);
+    
+    // ✅ MANEJO ESPECÍFICO DE ERRORES DE BASE DE DATOS
+    if (err.code === '42703') { // Column does not exist
+      return res.status(500).json({ 
+        error: 'Error de configuración: campos de privacidad no encontrados en base de datos' 
+      });
+    }
+    
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
