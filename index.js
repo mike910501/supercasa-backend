@@ -2036,6 +2036,107 @@ app.get('/api/consultar-pago/:transactionId', authenticateToken, async (req, res
   }
 });
 
+// 🔍 DEBUG - Ver exactamente qué enviamos a WOMPI para DaviPlata
+app.get('/debug-daviplata-last', async (req, res) => {
+  try {
+    // Buscar la última transacción DaviPlata de los logs
+    console.log('🔍 Buscando última transacción DaviPlata...');
+    
+    // Simular la misma llamada que hacemos en crear-pago
+    const crypto = await import('crypto');
+    
+    const merchantResponse = await fetch(`https://api.wompi.co/v1/merchants/pub_prod_GkQ7DyAjNXb63f1Imr9OQ1YNHLXd89FT`);
+    const merchantData = await merchantResponse.json();
+    
+    const acceptanceToken = merchantData.data.presigned_acceptance.acceptance_token;
+    const personalDataToken = merchantData.data.presigned_personal_data_auth.acceptance_token;
+    
+    const reference = `debug_daviplata_${Date.now()}`;
+    const amountInCents = 250000; // $2,500
+    const integrityKey = 'prod_integrity_70Ss0SPlsMMTT4uSx4zz85lOCTVtLKDa';
+    
+    const stringToSign = `${reference}${amountInCents}COP${integrityKey}`;
+    const signature = crypto.createHash('sha256').update(stringToSign).digest('hex');
+    
+    const transactionData = {
+      amount_in_cents: amountInCents,
+      currency: 'COP',
+      signature: signature,
+      customer_email: 'mikehuertas91@gmail.com', // Tu email real
+      payment_method: {
+        type: 'DAVIPLATA',
+        phone: '3133592457', // Tu número real
+        user_legal_id_type: 'CC',
+        user_legal_id: '1024518451' // Tu cédula real
+      },
+      reference: reference,
+      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
+      acceptance_token: acceptanceToken,
+      personal_data_auth_token: personalDataToken
+    };
+    
+    console.log('📤 ENVIANDO A WOMPI:', JSON.stringify(transactionData, null, 2));
+    
+    const wompiResponse = await fetch('https://api.wompi.co/v1/transactions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(transactionData)
+    });
+    
+    const wompiResult = await wompiResponse.json();
+    
+    console.log('📥 RESPUESTA WOMPI:', JSON.stringify(wompiResult, null, 2));
+    
+    // Si la respuesta es exitosa, consultar detalles de la transacción
+    if (wompiResponse.ok && wompiResult.data) {
+      const transactionId = wompiResult.data.id;
+      
+      // Esperar 5 segundos y consultar estado
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      const consultaResponse = await fetch(
+        `https://api.wompi.co/v1/transactions/${transactionId}`,
+        {
+          headers: {
+            'Authorization': `Bearer prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR`,
+            'Accept': 'application/json'
+          }
+        }
+      );
+      
+      const consultaResult = await consultaResponse.json();
+      
+      console.log('🔍 CONSULTA RESULTADO:', JSON.stringify(consultaResult, null, 2));
+      
+      res.json({
+        debug: 'DaviPlata Transaction Debug',
+        request_data: transactionData,
+        wompi_response: wompiResult,
+        transaction_query: consultaResult,
+        // Verificar si WOMPI incluye instrucciones especiales para DaviPlata
+        special_instructions: consultaResult.data?.payment_method || 'No instructions found'
+      });
+    } else {
+      res.json({
+        debug: 'DaviPlata Transaction Debug - ERROR',
+        request_data: transactionData,
+        wompi_response: wompiResult,
+        error: 'Transaction creation failed'
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Error en debug:', error);
+    res.status(500).json({ 
+      error: error.message,
+      stack: error.stack 
+    });
+  }
+});
+
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
