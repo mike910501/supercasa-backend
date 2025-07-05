@@ -1624,7 +1624,7 @@ app.get('/test-wompi-api', async (req, res) => {
 });
 
 // ===== TEST DAVIPLATA TRANSACCIÓN =====
-app.post('/test-daviplata', async (req, res) => {
+app.get('/test-daviplata', async (req, res) => {
   try {
     console.log('🧪 Probando transacción DaviPlata...');
     
