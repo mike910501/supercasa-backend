@@ -1925,6 +1925,117 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
   }
 });
 
+// 🔍 ENDPOINT VERIFICACIÓN DE PAGO
+app.get('/api/consultar-pago/:transactionId', authenticateToken, async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+    
+    console.log(`🔍 Consultando transacción: ${transactionId}`);
+
+    // PASO 1: Buscar en base de datos local
+    const pedidoLocal = await pool.query(`
+      SELECT * FROM pedidos 
+      WHERE payment_transaction_id = $1 
+      OR payment_reference = $1 
+      OR payment_reference LIKE $2
+      ORDER BY fecha DESC LIMIT 1
+    `, [transactionId, `%${transactionId}%`]);
+
+    if (pedidoLocal.rows.length > 0) {
+      const pedido = pedidoLocal.rows[0];
+      console.log(`✅ Pedido encontrado en BD: ${pedido.id}`);
+      
+      return res.json({
+        found: true,
+        status: pedido.payment_status,
+        pedidoId: pedido.id,
+        reference: pedido.payment_reference,
+        source: 'database'
+      });
+    }
+
+    // PASO 2: Consultar directamente a WOMPI
+    console.log(`🌐 Consultando WOMPI API para: ${transactionId}`);
+    
+    const wompiResponse = await fetch(
+      `https://api.wompi.co/v1/transactions/${transactionId}`,
+      {
+        headers: {
+          'Authorization': `Bearer prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR`,
+          'Accept': 'application/json'
+        }
+      }
+    );
+
+    if (!wompiResponse.ok) {
+      console.log(`❌ WOMPI API error: ${wompiResponse.status}`);
+      return res.json({
+        found: false,
+        status: 'PENDING',
+        message: 'Transacción en proceso...'
+      });
+    }
+
+    const wompiData = await wompiResponse.json();
+    const transaction = wompiData.data;
+    
+    console.log(`📊 WOMPI status: ${transaction.status}`);
+
+    // PASO 3: Si WOMPI dice APPROVED pero no tenemos pedido, esperar webhook
+    if (transaction.status === 'APPROVED') {
+      
+      // Dar tiempo al webhook para procesar
+      console.log('⏳ Pago aprobado, esperando webhook...');
+      
+      // Esperar hasta 10 segundos para que webhook cree el pedido
+      for (let i = 0; i < 5; i++) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        const pedidoCreado = await pool.query(`
+          SELECT * FROM pedidos 
+          WHERE payment_transaction_id = $1 
+          OR payment_reference = $2
+          ORDER BY fecha DESC LIMIT 1
+        `, [transactionId, transaction.reference]);
+        
+        if (pedidoCreado.rows.length > 0) {
+          const pedido = pedidoCreado.rows[0];
+          console.log(`✅ Webhook creó pedido: ${pedido.id}`);
+          
+          return res.json({
+            found: true,
+            status: 'APPROVED',
+            pedidoId: pedido.id,
+            reference: transaction.reference,
+            source: 'webhook'
+          });
+        }
+      }
+      
+      // Si llegamos aquí, pago aprobado pero sin pedido
+      console.log('⚠️ Pago aprobado pero pedido no creado por webhook');
+    }
+
+    // PASO 4: Responder con status de WOMPI
+    res.json({
+      found: true,
+      status: transaction.status,
+      reference: transaction.reference,
+      amount: transaction.amount_in_cents / 100,
+      payment_method: transaction.payment_method_type,
+      source: 'wompi_api'
+    });
+
+  } catch (error) {
+    console.error('❌ Error consultando pago:', error);
+    res.status(500).json({ 
+      found: false,
+      status: 'ERROR',
+      message: 'Error consultando estado del pago'
+    });
+  }
+});
+
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
