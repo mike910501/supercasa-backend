@@ -1748,6 +1748,183 @@ app.get('/test-nequi', async (req, res) => {
   }
 });
 
+// ===================
+// 💳 NUEVO SISTEMA WOMPI API DIRECTA
+// ===================
+
+// 🆕 ENDPOINT PRINCIPAL - CREAR PAGO
+app.post('/api/crear-pago', authenticateToken, async (req, res) => {
+  try {
+    const { 
+      metodoPago, // 'DAVIPLATA', 'NEQUI', 'PSE', 'CARD'
+      monto, 
+      productos,
+      datosEntrega,
+      telefono,
+      cedula,
+      banco // Para PSE
+    } = req.body;
+
+    console.log(`💳 Creando pago ${metodoPago} por $${monto}`);
+
+    const crypto = await import('crypto');
+
+    // Obtener tokens frescos
+    const merchantResponse = await fetch(`https://api.wompi.co/v1/merchants/pub_prod_GkQ7DyAjNXb63f1Imr9OQ1YNHLXd89FT`);
+    const merchantData = await merchantResponse.json();
+    
+    if (!merchantResponse.ok) {
+      throw new Error('Error obteniendo merchant data');
+    }
+
+    const acceptanceToken = merchantData.data.presigned_acceptance.acceptance_token;
+    const personalDataToken = merchantData.data.presigned_personal_data_auth.acceptance_token;
+
+    // Generar referencia única
+    const reference = `SUP_${metodoPago}_${Date.now()}`;
+    const amountInCents = Math.round(monto * 100);
+    const integrityKey = 'prod_integrity_70Ss0SPlsMMTT4uSx4zz85lOCTVtLKDa';
+
+    // Firma de integridad
+    const stringToSign = `${reference}${amountInCents}COP${integrityKey}`;
+    const signature = crypto.createHash('sha256').update(stringToSign).digest('hex');
+
+    // Configurar método de pago específico
+    let paymentMethod = {};
+
+    switch (metodoPago) {
+      case 'DAVIPLATA':
+        paymentMethod = {
+          type: 'DAVIPLATA',
+          phone: telefono,
+          user_legal_id_type: 'CC',
+          user_legal_id: cedula
+        };
+        break;
+
+      case 'NEQUI':
+        paymentMethod = {
+          type: 'NEQUI',
+          phone_number: telefono
+        };
+        break;
+
+      case 'PSE':
+        paymentMethod = {
+          type: 'PSE',
+          user_type: '0',
+          user_legal_id_type: 'CC',
+          user_legal_id: cedula,
+          financial_institution_code: banco,
+          payment_description: 'Compra SuperCasa'
+        };
+        break;
+
+      default:
+        return res.status(400).json({ error: 'Método de pago no soportado' });
+    }
+
+    // Datos de la transacción
+    const transactionData = {
+      amount_in_cents: amountInCents,
+      currency: 'COP',
+      signature: signature,
+      customer_email: req.user.email,
+      payment_method: paymentMethod,
+      reference: reference,
+      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
+      acceptance_token: acceptanceToken,
+      personal_data_auth_token: personalDataToken
+    };
+
+    // Si es PSE, agregar customer_data
+    if (metodoPago === 'PSE') {
+      transactionData.customer_data = {
+        phone_number: telefono,
+        full_name: req.user.nombre
+      };
+    }
+
+    console.log(`📤 Enviando transacción ${metodoPago} a WOMPI...`);
+
+    // Llamada a WOMPI
+    const wompiResponse = await fetch('https://api.wompi.co/v1/transactions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(transactionData)
+    });
+
+    const wompiResult = await wompiResponse.json();
+
+    if (!wompiResponse.ok) {
+      console.error('❌ Error WOMPI:', wompiResult);
+      return res.status(400).json({ 
+        error: 'Error creando pago', 
+        detalles: wompiResult 
+      });
+    }
+
+    const transaction = wompiResult.data;
+    
+    console.log(`✅ Transacción creada: ${transaction.id}`);
+
+    // Guardar carrito temporal para webhook
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS carrito_temporal (
+          id SERIAL PRIMARY KEY,
+          referencia VARCHAR(100) UNIQUE,
+          usuario_id INTEGER,
+          productos JSONB,
+          datos_entrega JSONB,
+          fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      await pool.query(
+        `INSERT INTO carrito_temporal (referencia, usuario_id, productos, datos_entrega) 
+         VALUES ($1, $2, $3, $4) 
+         ON CONFLICT (referencia) DO UPDATE SET 
+         productos = $3, datos_entrega = $4`,
+        [
+          reference,
+          req.user.userId,
+          JSON.stringify(productos),
+          JSON.stringify(datosEntrega)
+        ]
+      );
+
+      console.log(`💾 Carrito temporal guardado: ${reference}`);
+    } catch (error) {
+      console.error('⚠️ Error guardando carrito temporal:', error);
+    }
+
+    // Respuesta al frontend
+    res.json({
+      success: true,
+      transactionId: transaction.id,
+      reference: transaction.reference,
+      status: transaction.status,
+      metodoPago: metodoPago,
+      monto: monto,
+      redirectUrl: transaction.redirect_url,
+      // Para DaviPlata y Nequi, status será PENDING
+      // Para PSE, podría incluir URL de redirección
+      payment_method_type: transaction.payment_method_type
+    });
+
+  } catch (error) {
+    console.error('❌ Error creando pago:', error);
+    res.status(500).json({ 
+      error: 'Error interno creando pago',
+      message: error.message 
+    });
+  }
+});
+
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
