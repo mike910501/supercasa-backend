@@ -1629,7 +1629,7 @@ app.get('/test-daviplata', async (req, res) => {
     console.log('🧪 Probando transacción DaviPlata con datos completos...');
     
     const transactionData = {
-      amount_in_cents: 100, // $1 peso para prueba
+      amount_in_cents: 150000, // $1 peso para prueba
       currency: 'COP',
       customer_email: 'test@supercasa.com',
       payment_method: {
