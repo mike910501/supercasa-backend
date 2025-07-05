@@ -2137,7 +2137,7 @@ app.get('/debug-daviplata-last', async (req, res) => {
         user_legal_id: '1024518451' // Tu cédula real
       },
       reference: reference,
-      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
+      redirect_url: 'https://supercasa2.netlify.app',
       acceptance_token: acceptanceToken,
       personal_data_auth_token: personalDataToken
     };
