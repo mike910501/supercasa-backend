@@ -1902,6 +1902,26 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
       console.error('⚠️ Error guardando carrito temporal:', error);
     }
 
+// Consultar detalles completos de la transacción para obtener URLs específicas
+    const transactionDetailsResponse = await fetch(
+      `https://api.wompi.co/v1/transactions/${transaction.id}`,
+      {
+        headers: {
+          'Authorization': `Bearer prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR`,
+          'Accept': 'application/json'
+        }
+      }
+    );
+
+    const transactionDetails = await transactionDetailsResponse.json();
+    
+    // Extraer URL específica para DaviPlata si existe
+    let daviplataUrl = null;
+    if (metodoPago === 'DAVIPLATA' && transactionDetails.data?.payment_method?.extra?.url) {
+      daviplataUrl = transactionDetails.data.payment_method.extra.url;
+      console.log('🔗 URL DaviPlata encontrada:', daviplataUrl);
+    }
+
     // Respuesta al frontend
     res.json({
       success: true,
@@ -1911,9 +1931,11 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
       metodoPago: metodoPago,
       monto: monto,
       redirectUrl: transaction.redirect_url,
-      // Para DaviPlata y Nequi, status será PENDING
-      // Para PSE, podría incluir URL de redirección
-      payment_method_type: transaction.payment_method_type
+      // ✅ NUEVO: URL específica para DaviPlata
+      daviplataUrl: daviplataUrl,
+      payment_method_type: transaction.payment_method_type,
+      // Datos adicionales para debug
+      payment_method_details: transactionDetails.data?.payment_method
     });
 
   } catch (error) {
