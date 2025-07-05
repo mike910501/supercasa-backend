@@ -1623,56 +1623,46 @@ app.get('/test-wompi-api', async (req, res) => {
   }
 });
 
-// ===== TEST DAVIPLATA CON FIRMA DE INTEGRIDAD =====
-app.get('/test-daviplata', async (req, res) => {
+// ===== TEST PSE =====
+app.get('/test-pse', async (req, res) => {
   try {
-    console.log('🧪 Test DaviPlata - Con firma de integridad...');
+    console.log('🧪 Test PSE...');
     
-    // Importar crypto para generar firma
     const crypto = await import('crypto');
     
-    // PASO 1: Obtener tokens frescos del merchant
+    // Obtener tokens frescos
     const merchantResponse = await fetch(`https://api.wompi.co/v1/merchants/pub_prod_GkQ7DyAjNXb63f1Imr9OQ1YNHLXd89FT`);
     const merchantData = await merchantResponse.json();
-    
-    if (!merchantResponse.ok) {
-      throw new Error('Error obteniendo merchant data');
-    }
     
     const acceptanceToken = merchantData.data.presigned_acceptance.acceptance_token;
     const personalDataToken = merchantData.data.presigned_personal_data_auth.acceptance_token;
     
-    // PASO 2: Datos base de la transacción
-    const reference = `test_daviplata_${Date.now()}`;
+    // Datos PSE
+    const reference = `test_pse_${Date.now()}`;
     const amountInCents = 150000;
     const currency = 'COP';
     const integrityKey = 'prod_integrity_70Ss0SPlsMMTT4uSx4zz85lOCTVtLKDa';
     
-    // PASO 3: Generar firma de integridad
     const stringToSign = `${reference}${amountInCents}${currency}${integrityKey}`;
     const signature = crypto.createHash('sha256').update(stringToSign).digest('hex');
     
-    console.log('🔐 Firma generada:', signature);
-    
-    // PASO 4: Crear transacción completa
     const transactionData = {
       amount_in_cents: amountInCents,
       currency: currency,
-      signature: signature, // ✅ AGREGADO: Firma de integridad
+      signature: signature,
       customer_email: 'test@supercasa.com',
       payment_method: {
-        type: 'DAVIPLATA',
-        phone: '3001234567',
+        type: 'PSE',
+        user_type: '0', // Persona natural
         user_legal_id_type: 'CC',
-        user_legal_id: '1024518451'
+        user_legal_id: '1024518451',
+        financial_institution_code: '1022' // Banco de Bogotá
       },
       reference: reference,
       redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
       acceptance_token: acceptanceToken,
       personal_data_auth_token: personalDataToken
     };
-    
-    console.log('📤 Enviando transacción DaviPlata con firma...');
     
     const response = await fetch('https://api.wompi.co/v1/transactions', {
       method: 'POST',
@@ -1685,24 +1675,138 @@ app.get('/test-daviplata', async (req, res) => {
     
     const result = await response.json();
     
-    console.log('📱 DaviPlata response:', response.status, result);
-    
     res.json({
-      timestamp: new Date().toISOString(),
-      test_name: 'DaviPlata Transaction - Con Firma Integridad',
+      test_name: 'PSE Test',
       status: response.status,
       success: response.ok,
-      signature_string: stringToSign,
-      signature: signature,
       response_data: result
     });
     
   } catch (error) {
-    console.error('❌ Error DaviPlata:', error);
-    res.status(500).json({ 
-      error: error.message,
-      stack: error.stack 
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ===== TEST TARJETA =====
+app.get('/test-card', async (req, res) => {
+  try {
+    console.log('🧪 Test Tarjeta...');
+    
+    const crypto = await import('crypto');
+    
+    // Obtener tokens frescos
+    const merchantResponse = await fetch(`https://api.wompi.co/v1/merchants/pub_prod_GkQ7DyAjNXb63f1Imr9OQ1YNHLXd89FT`);
+    const merchantData = await merchantResponse.json();
+    
+    const acceptanceToken = merchantData.data.presigned_acceptance.acceptance_token;
+    const personalDataToken = merchantData.data.presigned_personal_data_auth.acceptance_token;
+    
+    // Datos tarjeta
+    const reference = `test_card_${Date.now()}`;
+    const amountInCents = 150000;
+    const currency = 'COP';
+    const integrityKey = 'prod_integrity_70Ss0SPlsMMTT4uSx4zz85lOCTVtLKDa';
+    
+    const stringToSign = `${reference}${amountInCents}${currency}${integrityKey}`;
+    const signature = crypto.createHash('sha256').update(stringToSign).digest('hex');
+    
+    const transactionData = {
+      amount_in_cents: amountInCents,
+      currency: currency,
+      signature: signature,
+      customer_email: 'test@supercasa.com',
+      payment_method: {
+        type: 'CARD',
+        token: 'tok_test_22222_8C5B9F8B9F8B9F8B', // Token de prueba
+        installments: 1
+      },
+      reference: reference,
+      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
+      acceptance_token: acceptanceToken,
+      personal_data_auth_token: personalDataToken
+    };
+    
+    const response = await fetch('https://api.wompi.co/v1/transactions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(transactionData)
     });
+    
+    const result = await response.json();
+    
+    res.json({
+      test_name: 'Card Test',
+      status: response.status,
+      success: response.ok,
+      response_data: result
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ===== TEST NEQUI =====
+app.get('/test-nequi', async (req, res) => {
+  try {
+    console.log('🧪 Test Nequi...');
+    
+    const crypto = await import('crypto');
+    
+    // Obtener tokens frescos
+    const merchantResponse = await fetch(`https://api.wompi.co/v1/merchants/pub_prod_GkQ7DyAjNXb63f1Imr9OQ1YNHLXd89FT`);
+    const merchantData = await merchantResponse.json();
+    
+    const acceptanceToken = merchantData.data.presigned_acceptance.acceptance_token;
+    const personalDataToken = merchantData.data.presigned_personal_data_auth.acceptance_token;
+    
+    // Datos Nequi
+    const reference = `test_nequi_${Date.now()}`;
+    const amountInCents = 150000;
+    const currency = 'COP';
+    const integrityKey = 'prod_integrity_70Ss0SPlsMMTT4uSx4zz85lOCTVtLKDa';
+    
+    const stringToSign = `${reference}${amountInCents}${currency}${integrityKey}`;
+    const signature = crypto.createHash('sha256').update(stringToSign).digest('hex');
+    
+    const transactionData = {
+      amount_in_cents: amountInCents,
+      currency: currency,
+      signature: signature,
+      customer_email: 'test@supercasa.com',
+      payment_method: {
+        type: 'NEQUI',
+        phone: '3001234567'
+      },
+      reference: reference,
+      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
+      acceptance_token: acceptanceToken,
+      personal_data_auth_token: personalDataToken
+    };
+    
+    const response = await fetch('https://api.wompi.co/v1/transactions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(transactionData)
+    });
+    
+    const result = await response.json();
+    
+    res.json({
+      test_name: 'Nequi Test',
+      status: response.status,
+      success: response.ok,
+      response_data: result
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
