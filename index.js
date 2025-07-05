@@ -1902,7 +1902,12 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
       console.error('⚠️ Error guardando carrito temporal:', error);
     }
 
-// Consultar detalles completos de la transacción para obtener URLs específicas
+      // ✅ ESPERAR 5 segundos para que WOMPI procese completamente
+    console.log('⏳ Esperando 5 segundos para consulta de detalles...');
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    // Consultar detalles completos de la transacción para obtener URLs específicas
+    console.log('🔍 Consultando detalles de transacción:', transaction.id);
     const transactionDetailsResponse = await fetch(
       `https://api.wompi.co/v1/transactions/${transaction.id}`,
       {
@@ -1914,15 +1919,51 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
     );
 
     const transactionDetails = await transactionDetailsResponse.json();
+
+    // ✅ LOGS DE DEBUG TEMPORALES
+    console.log('🔍 DEBUG - Status consulta detalles:', transactionDetailsResponse.status);
+    console.log('🔍 DEBUG - Transaction details completos:', JSON.stringify(transactionDetails, null, 2));
+    console.log('🔍 DEBUG - Payment method extra:', transactionDetails.data?.payment_method?.extra);
+    console.log('🔍 DEBUG - URL extraída:', transactionDetails.data?.payment_method?.extra?.url);
     
     // Extraer URL específica para DaviPlata si existe
     let daviplataUrl = null;
     if (metodoPago === 'DAVIPLATA' && transactionDetails.data?.payment_method?.extra?.url) {
       daviplataUrl = transactionDetails.data.payment_method.extra.url;
       console.log('🔗 URL DaviPlata encontrada:', daviplataUrl);
+    } else if (metodoPago === 'DAVIPLATA') {
+      console.log('⚠️ URL DaviPlata no encontrada en extra, intentando consulta adicional...');
+      
+      // Intentar consulta adicional después de más tiempo
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      const retryResponse = await fetch(
+        `https://api.wompi.co/v1/transactions/${transaction.id}`,
+        {
+          headers: {
+            'Authorization': `Bearer prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR`,
+            'Accept': 'application/json'
+          }
+        }
+      );
+      
+      const retryDetails = await retryResponse.json();
+      console.log('🔄 RETRY - Payment method extra:', retryDetails.data?.payment_method?.extra);
+      
+      if (retryDetails.data?.payment_method?.extra?.url) {
+        daviplataUrl = retryDetails.data.payment_method.extra.url;
+        console.log('🔗 URL DaviPlata encontrada en retry:', daviplataUrl);
+      }
     }
 
-    // Respuesta al frontend
+    // ✅ LOG FINAL ANTES DE ENVIAR RESPUESTA
+    console.log('📤 DEBUG - Respuesta final que se envía:', {
+      metodoPago,
+      daviplataUrl,
+      payment_method_details: transactionDetails.data?.payment_method
+    });
+
+    // ✅ RESPUESTA ÚNICA AL FRONTEND
     res.json({
       success: true,
       transactionId: transaction.id,
@@ -1940,10 +1981,14 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error creando pago:', error);
-    res.status(500).json({ 
-      error: 'Error interno creando pago',
-      message: error.message 
-    });
+    
+    // Solo responder si no se ha enviado respuesta ya
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Error interno creando pago',
+        message: error.message 
+      });
+    }
   }
 });
 
