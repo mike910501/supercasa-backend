@@ -1623,10 +1623,10 @@ app.get('/test-wompi-api', async (req, res) => {
   }
 });
 
-// ===== TEST DAVIPLATA TRANSACCIÓN =====
+// ===== TEST DAVIPLATA TRANSACCIÓN COMPLETA =====
 app.get('/test-daviplata', async (req, res) => {
   try {
-    console.log('🧪 Probando transacción DaviPlata...');
+    console.log('🧪 Probando transacción DaviPlata con datos completos...');
     
     const transactionData = {
       amount_in_cents: 100, // $1 peso para prueba
@@ -1634,11 +1634,15 @@ app.get('/test-daviplata', async (req, res) => {
       customer_email: 'test@supercasa.com',
       payment_method: {
         type: 'DAVIPLATA',
-        phone: '3001234567' // Número de prueba
+        phone: '3001234567',
+        user_legal_id_type: 'CC', // ✅ AGREGADO: Tipo documento
+        user_legal_id: '1024518451' // ✅ AGREGADO: Número cédula
       },
-      reference: `test_${Date.now()}`,
-      redirect_url: 'https://supercasa2.netlify.app'
+      reference: `test_daviplata_${Date.now()}`,
+      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso'
     };
+    
+    console.log('📤 Enviando a WOMPI:', JSON.stringify(transactionData, null, 2));
     
     const response = await fetch('https://api.wompi.co/v1/transactions', {
       method: 'POST',
@@ -1654,14 +1658,20 @@ app.get('/test-daviplata', async (req, res) => {
     console.log('📱 DaviPlata response:', response.status, result);
     
     res.json({
+      timestamp: new Date().toISOString(),
+      test_name: 'DaviPlata Transaction Test',
       status: response.status,
       success: response.ok,
-      data: result
+      request_data: transactionData,
+      response_data: result
     });
     
   } catch (error) {
     console.error('❌ Error DaviPlata:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      error: error.message,
+      stack: error.stack 
+    });
   }
 });
 
