@@ -1623,11 +1623,25 @@ app.get('/test-wompi-api', async (req, res) => {
   }
 });
 
-// ===== TEST DAVIPLATA TRANSACCIÓN FINAL =====
+// ===== TEST DAVIPLATA CON TOKENS DINÁMICOS =====
 app.get('/test-daviplata', async (req, res) => {
   try {
-    console.log('🧪 Probando transacción DaviPlata con acceptance_token...');
+    console.log('🧪 Test DaviPlata - Obteniendo tokens frescos...');
     
+    // PASO 1: Obtener tokens frescos del merchant
+    const merchantResponse = await fetch(`https://api.wompi.co/v1/merchants/pub_prod_GkQ7DyAjNXb63f1Imr9OQ1YNHLXd89FT`);
+    const merchantData = await merchantResponse.json();
+    
+    if (!merchantResponse.ok) {
+      throw new Error('Error obteniendo merchant data');
+    }
+    
+    const acceptanceToken = merchantData.data.presigned_acceptance.acceptance_token;
+    const personalDataToken = merchantData.data.presigned_personal_data_auth.acceptance_token;
+    
+    console.log('✅ Tokens frescos obtenidos');
+    
+    // PASO 2: Crear transacción con tokens frescos
     const transactionData = {
       amount_in_cents: 150000, // $1,500 pesos
       currency: 'COP',
@@ -1640,12 +1654,11 @@ app.get('/test-daviplata', async (req, res) => {
       },
       reference: `test_daviplata_${Date.now()}`,
       redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
-      // ✅ AGREGADO: Tokens de aceptación (del test merchant anterior)
-      acceptance_token: 'eyJhbGciOiJIUzI1NiJ9.eyJjb250cmFjdF9pZCI6MjQzLCJwZXJtYWxpbmsiOiJodHRwczovL3dvbXBpLmNvbS9hc3NldHMvZG93bmxvYWRibGUvcmVnbGFtZW50by1Vc3Vhcmlvcy1Db2xvbWJpYS5wZGYiLCJmaWxlX2hhc2giOiJkMWVkMDI3NjhlNDEzZWEyMzFmNzAwMjc0N2Y0N2FhOSIsImppdCI6IjE3NTE2MDAyMDgtNDIwNDUiLCJlbWFpbCI6IiIsImV4cCI6MTc1MTYwMzgwOH0.wzYkfzQS5nNRTGhADowbXvhUQk09oWHLG72Wcv-2udo',
-      personal_data_auth_token: 'eyJhbGciOiJIUzI1NiJ9.eyJjb250cmFjdF9pZCI6NDQxLCJwZXJtYWxpbmsiOiJodHRwczovL3dvbXBpLmNvbS9hc3NldHMvZG93bmxvYWRibGUvYXV0b3JpemFjaW9uLWFkbWluaXN0cmFjaW9uLWRhdG9zLXBlcnNvbmFsZXMucGRmIiwiZmlsZV9oYXNoIjoiMDI1YjQ1NzRjYTYwNjNlNGVlZDJmZmRhZGFjY2Q0MmIiLCJqaXQiOiIxNzUxNjAwMjA4LTU4OTg2IiwiZW1haWwiOiIifQ.SCD0VEgLHYOcgO5N3yvF0NcK1JC5MMuH18flCBuYzeY'
+      acceptance_token: acceptanceToken, // ✅ Token fresco
+      personal_data_auth_token: personalDataToken // ✅ Token fresco
     };
     
-    console.log('📤 Enviando a WOMPI con tokens:', JSON.stringify(transactionData, null, 2));
+    console.log('📤 Enviando transacción DaviPlata...');
     
     const response = await fetch('https://api.wompi.co/v1/transactions', {
       method: 'POST',
@@ -1662,10 +1675,13 @@ app.get('/test-daviplata', async (req, res) => {
     
     res.json({
       timestamp: new Date().toISOString(),
-      test_name: 'DaviPlata Transaction Test - Final',
+      test_name: 'DaviPlata Transaction - Tokens Dinámicos',
       status: response.status,
       success: response.ok,
-      request_data: transactionData,
+      tokens_used: {
+        acceptance_token: acceptanceToken.substring(0, 50) + '...',
+        personal_data_token: personalDataToken.substring(0, 50) + '...'
+      },
       response_data: result
     });
     
