@@ -1623,10 +1623,10 @@ app.get('/test-wompi-api', async (req, res) => {
   }
 });
 
-// ===== TEST PSE =====
+// ===== TEST PSE CORREGIDO =====
 app.get('/test-pse', async (req, res) => {
   try {
-    console.log('🧪 Test PSE...');
+    console.log('🧪 Test PSE corregido...');
     
     const crypto = await import('crypto');
     
@@ -1656,7 +1656,8 @@ app.get('/test-pse', async (req, res) => {
         user_type: '0', // Persona natural
         user_legal_id_type: 'CC',
         user_legal_id: '1024518451',
-        financial_institution_code: '1022' // Banco de Bogotá
+        financial_institution_code: '1022', // Banco de Bogotá
+        payment_description: 'Compra SuperCasa' // ✅ AGREGADO
       },
       reference: reference,
       redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
@@ -1676,7 +1677,7 @@ app.get('/test-pse', async (req, res) => {
     const result = await response.json();
     
     res.json({
-      test_name: 'PSE Test',
+      test_name: 'PSE Test Corregido',
       status: response.status,
       success: response.ok,
       response_data: result
@@ -1686,73 +1687,10 @@ app.get('/test-pse', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-// ===== TEST TARJETA =====
-app.get('/test-card', async (req, res) => {
-  try {
-    console.log('🧪 Test Tarjeta...');
-    
-    const crypto = await import('crypto');
-    
-    // Obtener tokens frescos
-    const merchantResponse = await fetch(`https://api.wompi.co/v1/merchants/pub_prod_GkQ7DyAjNXb63f1Imr9OQ1YNHLXd89FT`);
-    const merchantData = await merchantResponse.json();
-    
-    const acceptanceToken = merchantData.data.presigned_acceptance.acceptance_token;
-    const personalDataToken = merchantData.data.presigned_personal_data_auth.acceptance_token;
-    
-    // Datos tarjeta
-    const reference = `test_card_${Date.now()}`;
-    const amountInCents = 150000;
-    const currency = 'COP';
-    const integrityKey = 'prod_integrity_70Ss0SPlsMMTT4uSx4zz85lOCTVtLKDa';
-    
-    const stringToSign = `${reference}${amountInCents}${currency}${integrityKey}`;
-    const signature = crypto.createHash('sha256').update(stringToSign).digest('hex');
-    
-    const transactionData = {
-      amount_in_cents: amountInCents,
-      currency: currency,
-      signature: signature,
-      customer_email: 'test@supercasa.com',
-      payment_method: {
-        type: 'CARD',
-        token: 'tok_test_22222_8C5B9F8B9F8B9F8B', // Token de prueba
-        installments: 1
-      },
-      reference: reference,
-      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
-      acceptance_token: acceptanceToken,
-      personal_data_auth_token: personalDataToken
-    };
-    
-    const response = await fetch('https://api.wompi.co/v1/transactions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(transactionData)
-    });
-    
-    const result = await response.json();
-    
-    res.json({
-      test_name: 'Card Test',
-      status: response.status,
-      success: response.ok,
-      response_data: result
-    });
-    
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ===== TEST NEQUI =====
+// ===== TEST NEQUI CORREGIDO =====
 app.get('/test-nequi', async (req, res) => {
   try {
-    console.log('🧪 Test Nequi...');
+    console.log('🧪 Test Nequi corregido...');
     
     const crypto = await import('crypto');
     
@@ -1779,7 +1717,7 @@ app.get('/test-nequi', async (req, res) => {
       customer_email: 'test@supercasa.com',
       payment_method: {
         type: 'NEQUI',
-        phone: '3001234567'
+        phone_number: '3001234567' // ✅ CORREGIDO: phone_number no phone
       },
       reference: reference,
       redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
@@ -1799,7 +1737,7 @@ app.get('/test-nequi', async (req, res) => {
     const result = await response.json();
     
     res.json({
-      test_name: 'Nequi Test',
+      test_name: 'Nequi Test Corregido',
       status: response.status,
       success: response.ok,
       response_data: result
