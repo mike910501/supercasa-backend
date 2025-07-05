@@ -1660,7 +1660,7 @@ app.get('/test-pse', async (req, res) => {
         payment_description: 'Compra SuperCasa' // ✅ AGREGADO
       },
       reference: reference,
-      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
+      redirect_url: 'https://supercasa2.netlify.app',
       acceptance_token: acceptanceToken,
       personal_data_auth_token: personalDataToken
     };
@@ -1720,7 +1720,7 @@ app.get('/test-nequi', async (req, res) => {
         phone_number: '3001234567' // ✅ CORREGIDO: phone_number no phone
       },
       reference: reference,
-      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
+      redirect_url: 'https://supercasa2.netlify.app',
       acceptance_token: acceptanceToken,
       personal_data_auth_token: personalDataToken
     };
@@ -1832,7 +1832,7 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
       customer_email: req.user.email,
       payment_method: paymentMethod,
       reference: reference,
-      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
+      redirect_url: 'https://supercasa2.netlify.app',
       acceptance_token: acceptanceToken,
       personal_data_auth_token: personalDataToken
     };
