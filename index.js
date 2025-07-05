@@ -1623,26 +1623,29 @@ app.get('/test-wompi-api', async (req, res) => {
   }
 });
 
-// ===== TEST DAVIPLATA TRANSACCIÓN COMPLETA =====
+// ===== TEST DAVIPLATA TRANSACCIÓN FINAL =====
 app.get('/test-daviplata', async (req, res) => {
   try {
-    console.log('🧪 Probando transacción DaviPlata con datos completos...');
+    console.log('🧪 Probando transacción DaviPlata con acceptance_token...');
     
     const transactionData = {
-      amount_in_cents: 150000, // $1 peso para prueba
+      amount_in_cents: 150000, // $1,500 pesos
       currency: 'COP',
       customer_email: 'test@supercasa.com',
       payment_method: {
         type: 'DAVIPLATA',
         phone: '3001234567',
-        user_legal_id_type: 'CC', // ✅ AGREGADO: Tipo documento
-        user_legal_id: '1024518451' // ✅ AGREGADO: Número cédula
+        user_legal_id_type: 'CC',
+        user_legal_id: '1024518451'
       },
       reference: `test_daviplata_${Date.now()}`,
-      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso'
+      redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
+      // ✅ AGREGADO: Tokens de aceptación (del test merchant anterior)
+      acceptance_token: 'eyJhbGciOiJIUzI1NiJ9.eyJjb250cmFjdF9pZCI6MjQzLCJwZXJtYWxpbmsiOiJodHRwczovL3dvbXBpLmNvbS9hc3NldHMvZG93bmxvYWRibGUvcmVnbGFtZW50by1Vc3Vhcmlvcy1Db2xvbWJpYS5wZGYiLCJmaWxlX2hhc2giOiJkMWVkMDI3NjhlNDEzZWEyMzFmNzAwMjc0N2Y0N2FhOSIsImppdCI6IjE3NTE2MDAyMDgtNDIwNDUiLCJlbWFpbCI6IiIsImV4cCI6MTc1MTYwMzgwOH0.wzYkfzQS5nNRTGhADowbXvhUQk09oWHLG72Wcv-2udo',
+      personal_data_auth_token: 'eyJhbGciOiJIUzI1NiJ9.eyJjb250cmFjdF9pZCI6NDQxLCJwZXJtYWxpbmsiOiJodHRwczovL3dvbXBpLmNvbS9hc3NldHMvZG93bmxvYWRibGUvYXV0b3JpemFjaW9uLWFkbWluaXN0cmFjaW9uLWRhdG9zLXBlcnNvbmFsZXMucGRmIiwiZmlsZV9oYXNoIjoiMDI1YjQ1NzRjYTYwNjNlNGVlZDJmZmRhZGFjY2Q0MmIiLCJqaXQiOiIxNzUxNjAwMjA4LTU4OTg2IiwiZW1haWwiOiIifQ.SCD0VEgLHYOcgO5N3yvF0NcK1JC5MMuH18flCBuYzeY'
     };
     
-    console.log('📤 Enviando a WOMPI:', JSON.stringify(transactionData, null, 2));
+    console.log('📤 Enviando a WOMPI con tokens:', JSON.stringify(transactionData, null, 2));
     
     const response = await fetch('https://api.wompi.co/v1/transactions', {
       method: 'POST',
@@ -1659,7 +1662,7 @@ app.get('/test-daviplata', async (req, res) => {
     
     res.json({
       timestamp: new Date().toISOString(),
-      test_name: 'DaviPlata Transaction Test',
+      test_name: 'DaviPlata Transaction Test - Final',
       status: response.status,
       success: response.ok,
       request_data: transactionData,
