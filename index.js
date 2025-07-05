@@ -1623,10 +1623,13 @@ app.get('/test-wompi-api', async (req, res) => {
   }
 });
 
-// ===== TEST DAVIPLATA CON TOKENS DINÁMICOS =====
+// ===== TEST DAVIPLATA CON FIRMA DE INTEGRIDAD =====
 app.get('/test-daviplata', async (req, res) => {
   try {
-    console.log('🧪 Test DaviPlata - Obteniendo tokens frescos...');
+    console.log('🧪 Test DaviPlata - Con firma de integridad...');
+    
+    // Importar crypto para generar firma
+    const crypto = await import('crypto');
     
     // PASO 1: Obtener tokens frescos del merchant
     const merchantResponse = await fetch(`https://api.wompi.co/v1/merchants/pub_prod_GkQ7DyAjNXb63f1Imr9OQ1YNHLXd89FT`);
@@ -1639,12 +1642,23 @@ app.get('/test-daviplata', async (req, res) => {
     const acceptanceToken = merchantData.data.presigned_acceptance.acceptance_token;
     const personalDataToken = merchantData.data.presigned_personal_data_auth.acceptance_token;
     
-    console.log('✅ Tokens frescos obtenidos');
+    // PASO 2: Datos base de la transacción
+    const reference = `test_daviplata_${Date.now()}`;
+    const amountInCents = 150000;
+    const currency = 'COP';
+    const integrityKey = 'prod_integrity_70Ss0SPlsMMTT4uSx4zz85lOCTVtLKDa';
     
-    // PASO 2: Crear transacción con tokens frescos
+    // PASO 3: Generar firma de integridad
+    const stringToSign = `${reference}${amountInCents}${currency}${integrityKey}`;
+    const signature = crypto.createHash('sha256').update(stringToSign).digest('hex');
+    
+    console.log('🔐 Firma generada:', signature);
+    
+    // PASO 4: Crear transacción completa
     const transactionData = {
-      amount_in_cents: 150000, // $1,500 pesos
-      currency: 'COP',
+      amount_in_cents: amountInCents,
+      currency: currency,
+      signature: signature, // ✅ AGREGADO: Firma de integridad
       customer_email: 'test@supercasa.com',
       payment_method: {
         type: 'DAVIPLATA',
@@ -1652,13 +1666,13 @@ app.get('/test-daviplata', async (req, res) => {
         user_legal_id_type: 'CC',
         user_legal_id: '1024518451'
       },
-      reference: `test_daviplata_${Date.now()}`,
+      reference: reference,
       redirect_url: 'https://supercasa2.netlify.app/pago-exitoso',
-      acceptance_token: acceptanceToken, // ✅ Token fresco
-      personal_data_auth_token: personalDataToken // ✅ Token fresco
+      acceptance_token: acceptanceToken,
+      personal_data_auth_token: personalDataToken
     };
     
-    console.log('📤 Enviando transacción DaviPlata...');
+    console.log('📤 Enviando transacción DaviPlata con firma...');
     
     const response = await fetch('https://api.wompi.co/v1/transactions', {
       method: 'POST',
@@ -1675,13 +1689,11 @@ app.get('/test-daviplata', async (req, res) => {
     
     res.json({
       timestamp: new Date().toISOString(),
-      test_name: 'DaviPlata Transaction - Tokens Dinámicos',
+      test_name: 'DaviPlata Transaction - Con Firma Integridad',
       status: response.status,
       success: response.ok,
-      tokens_used: {
-        acceptance_token: acceptanceToken.substring(0, 50) + '...',
-        personal_data_token: personalDataToken.substring(0, 50) + '...'
-      },
+      signature_string: stringToSign,
+      signature: signature,
       response_data: result
     });
     
