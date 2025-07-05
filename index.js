@@ -1198,31 +1198,30 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
               }
             }
             
-            // Crear pedido con productos reales
             const pedidoWebhook = await pool.query(
-              `INSERT INTO pedidos (
-                usuario_id, productos, total, 
-                torre_entrega, piso_entrega, apartamento_entrega,
-                telefono_contacto, payment_reference, payment_status,
-                payment_method, payment_transaction_id, payment_amount_cents, estado
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
-              RETURNING id`,
-              [
-                usuario.id,
-                JSON.stringify(productosReales),
-                transaction.amount_in_cents / 100,
-                usuario.torre,
-                usuario.piso, 
-                usuario.apartamento,
-                'Webhook auto',
-                reference,
-                'APPROVED',
-                paymentMethod, // 🆕 Usar variable en lugar de acceso directo
-                transactionId,
-                transaction.amount_in_cents,
-                'pendiente'
-              ]
-            );
+  `INSERT INTO pedidos (
+    usuario_id, productos, total, 
+    torre_entrega, piso_entrega, apartamento_entrega,
+    telefono_contacto, payment_reference, payment_status,
+    payment_method, payment_transaction_id, payment_amount_cents, estado
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
+  RETURNING id`,
+  [
+    usuario.id,
+    JSON.stringify(productosReales),
+    transaction.amount_in_cents / 100,
+    usuario.torre || '1',
+    parseInt(usuario.piso) || 1,    // ← CONVERSIÓN A INTEGER
+    usuario.apartamento || '101',
+    'Webhook auto',
+    reference,
+    'APPROVED',
+    paymentMethod,
+    transactionId,
+    transaction.amount_in_cents,
+    'pendiente'
+  ]
+);
 
             // 🆕 LOG ESPECÍFICO PARA TARJETAS
             if (paymentMethod === 'CARD') {
