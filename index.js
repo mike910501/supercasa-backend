@@ -1623,6 +1623,48 @@ app.get('/test-wompi-api', async (req, res) => {
   }
 });
 
+// ===== TEST DAVIPLATA TRANSACCIÓN =====
+app.post('/test-daviplata', async (req, res) => {
+  try {
+    console.log('🧪 Probando transacción DaviPlata...');
+    
+    const transactionData = {
+      amount_in_cents: 100, // $1 peso para prueba
+      currency: 'COP',
+      customer_email: 'test@supercasa.com',
+      payment_method: {
+        type: 'DAVIPLATA',
+        phone: '3001234567' // Número de prueba
+      },
+      reference: `test_${Date.now()}`,
+      redirect_url: 'https://supercasa2.netlify.app'
+    };
+    
+    const response = await fetch('https://api.wompi.co/v1/transactions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer prv_prod_bR8TUl71quylBwNiQcNn8OIFD1i9IdsR`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(transactionData)
+    });
+    
+    const result = await response.json();
+    
+    console.log('📱 DaviPlata response:', response.status, result);
+    
+    res.json({
+      status: response.status,
+      success: response.ok,
+      data: result
+    });
+    
+  } catch (error) {
+    console.error('❌ Error DaviPlata:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
   console.log('🚀 Backend corriendo en http://localhost:3000');
