@@ -1042,8 +1042,7 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
   }
 });
 
-
-// ✅ WEBHOOK WOMPI INTELIGENTE - REEMPLAZAR COMPLETAMENTE
+// ✅ WEBHOOK WOMPI INTELIGENTE - CON SOPORTE PARA TARJETAS
 app.post('/webhook/wompi', express.json(), async (req, res) => {
   try {
     console.log('🔔 Webhook WOMPI recibido');
@@ -1060,8 +1059,14 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
       const status = transaction.status;
       const reference = transaction.reference;
       const transactionId = transaction.id;
+      const paymentMethod = transaction.payment_method_type; // 🆕 Capturar método de pago
       
-      console.log(`📦 Procesando transacción ${transactionId} - Estado: ${status}`);
+      console.log(`📦 Procesando transacción ${transactionId} - Estado: ${status} - Método: ${paymentMethod}`);
+      
+      // 🆕 LOG ESPECÍFICO PARA TARJETAS
+      if (paymentMethod === 'CARD') {
+        console.log('💳 Webhook procesando pago con TARJETA');
+      }
       
       // Buscar pedido existente
       const pedidoResult = await pool.query(
@@ -1069,162 +1074,172 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
         [reference, transactionId]
       );
       
-if (pedidoResult.rows.length === 0 && status === 'APPROVED') {
-  console.log(`🚨 PEDIDO NO ENCONTRADO - Creando desde webhook para transacción ${transactionId}`);
-  
-  try {
-    // Buscar usuario por email
-    const userResult = await pool.query(
-      'SELECT id, nombre, torre, piso, apartamento FROM usuarios WHERE email = $1',
-      [transaction.customer_email]
-    );
-    
-    if (userResult.rows.length > 0) {
-      const usuario = userResult.rows[0];
-      
-      // 🆕 INTENTAR RECUPERAR PRODUCTOS REALES
-      let productosReales = [];
-      
-        // 💾 NUEVO: RECUPERAR CARRITO REAL DESDE TABLA TEMPORAL
-console.log(`💾 Buscando carrito temporal para referencia: ${reference}`);
-
-const carritoTemp = await pool.query(
-  'SELECT productos, datos_entrega FROM carrito_temporal WHERE referencia = $1',
-  [reference]
-);
-
-if (carritoTemp.rows.length > 0) {
-  console.log('✅ Carrito temporal encontrado');
-  
-  // 🛠️ PARSING SEGURO - VERIFICAR SI ES OBJETO O STRING
-const productosCarrito = typeof carritoTemp.rows[0].productos === 'string' 
-  ? JSON.parse(carritoTemp.rows[0].productos) 
-  : carritoTemp.rows[0].productos;
-
-const datosEntrega = typeof carritoTemp.rows[0].datos_entrega === 'string' 
-  ? JSON.parse(carritoTemp.rows[0].datos_entrega) 
-  : carritoTemp.rows[0].datos_entrega;
-  
-  // Usar productos reales del carrito
-  for (const item of productosCarrito) {
-    productosReales.push({
-      id: item.id,
-      nombre: item.nombre,
-      precio: item.precio,
-      cantidad: item.cantidad,
-      codigo: item.codigo || `TEMP-${item.id}`
-    });
-    
-    // 🆕 REDUCIR STOCK DE PRODUCTOS REALES
-    if (item.id && !isNaN(parseInt(item.id))) {
-      await pool.query(
-        'UPDATE productos SET stock = GREATEST(stock - $1, 0) WHERE id = $2',
-        [item.cantidad, item.id]
-      );
-      
-      console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${item.cantidad}`);
-    }
-  }
-  
-  // Actualizar datos de entrega si están disponibles
-  if (datosEntrega.torre_entrega) {
-    usuario.torre = datosEntrega.torre_entrega;
-    usuario.piso = datosEntrega.piso_entrega;
-    usuario.apartamento = datosEntrega.apartamento_entrega;
-  }
-  
-  // Limpiar carrito temporal después de usar
-  await pool.query('DELETE FROM carrito_temporal WHERE referencia = $1', [reference]);
-  console.log('🗑️ Carrito temporal eliminado');
-  
-} else {
-  console.log('⚠️ No se encontró carrito temporal, usando productos estimados...');
-  
-  // FALLBACK: Código original de productos estimados
-  const productosPopulares = await pool.query(`
-    SELECT p.id, p.nombre, p.precio, p.stock
-    FROM productos p
-    WHERE p.stock > 0
-    ORDER BY p.id ASC
-    LIMIT 3
-  `);
-  
-  if (productosPopulares.rows.length > 0) {
-    const montoTotal = transaction.amount_in_cents / 100;
-    let montoRestante = montoTotal;
-    
-    for (const producto of productosPopulares.rows) {
-      if (montoRestante <= 0) break;
-      
-      const cantidad = Math.min(
-        Math.floor(montoRestante / producto.precio), 
-        producto.stock,
-        3
-      );
-      
-      if (cantidad > 0) {
-        productosReales.push({
-          id: producto.id,
-          nombre: producto.nombre,
-          precio: producto.precio,
-          cantidad: cantidad,
-          codigo: `AUTO-${producto.id}`
-        });
+      if (pedidoResult.rows.length === 0 && status === 'APPROVED') {
+        console.log(`🚨 PEDIDO NO ENCONTRADO - Creando desde webhook para transacción ${transactionId}`);
         
-        montoRestante -= (producto.precio * cantidad);
-      }
-    }
-  }
-  
-  // Si no se pudo crear productos reales, usar uno genérico
-  if (productosReales.length === 0) {
-    productosReales = [{
-      id: 'webhook-generic',
-      nombre: 'Pedido procesado por webhook',
-      cantidad: 1,
-      precio: transaction.amount_in_cents / 100,
-      codigo: 'WEBHOOK-AUTO'
-    }];
-  }
-}
-      
- // Crear pedido con productos reales
-const pedidoWebhook = await pool.query(
-  `INSERT INTO pedidos (
-    usuario_id, productos, total, 
-    torre_entrega, piso_entrega, apartamento_entrega,
-    telefono_contacto, payment_reference, payment_status,
-    payment_method, payment_transaction_id, payment_amount_cents, estado
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
-  RETURNING id`,
-  [
-    usuario.id,
-    JSON.stringify(productosReales),
-    transaction.amount_in_cents / 100,
-    usuario.torre,
-    usuario.piso, 
-    usuario.apartamento,
-    'Webhook auto',
-    reference,
-    'APPROVED',
-    transaction.payment_method_type,
-    transactionId,
-    transaction.amount_in_cents,
-    'pendiente'
-  ]
-);
+        try {
+          // Buscar usuario por email
+          const userResult = await pool.query(
+            'SELECT id, nombre, torre, piso, apartamento FROM usuarios WHERE email = $1',
+            [transaction.customer_email]
+          );
+          
+          if (userResult.rows.length > 0) {
+            const usuario = userResult.rows[0];
+            
+            // 🆕 INTENTAR RECUPERAR PRODUCTOS REALES
+            let productosReales = [];
+            
+            // 💾 RECUPERAR CARRITO REAL DESDE TABLA TEMPORAL
+            console.log(`💾 Buscando carrito temporal para referencia: ${reference}`);
 
-console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con productos reales`);
+            const carritoTemp = await pool.query(
+              'SELECT productos, datos_entrega FROM carrito_temporal WHERE referencia = $1',
+              [reference]
+            );
 
-} else {
-  console.log(`❌ Usuario no encontrado para email ${transaction.customer_email}`);
-}
-    
-  } catch (createError) {
-    console.error('❌ Error creando pedido desde webhook:', createError);
-  }
-  
-} else if (pedidoResult.rows.length > 0) {
+            if (carritoTemp.rows.length > 0) {
+              console.log('✅ Carrito temporal encontrado');
+              
+              // 🆕 LOG ESPECÍFICO PARA TARJETAS
+              if (paymentMethod === 'CARD') {
+                console.log('💳 Procesando carrito de pago con TARJETA');
+              }
+              
+              // 🛠️ PARSING SEGURO - VERIFICAR SI ES OBJETO O STRING
+              const productosCarrito = typeof carritoTemp.rows[0].productos === 'string' 
+                ? JSON.parse(carritoTemp.rows[0].productos) 
+                : carritoTemp.rows[0].productos;
+
+              const datosEntrega = typeof carritoTemp.rows[0].datos_entrega === 'string' 
+                ? JSON.parse(carritoTemp.rows[0].datos_entrega) 
+                : carritoTemp.rows[0].datos_entrega;
+              
+              // Usar productos reales del carrito
+              for (const item of productosCarrito) {
+                productosReales.push({
+                  id: item.id,
+                  nombre: item.nombre,
+                  precio: item.precio,
+                  cantidad: item.cantidad,
+                  codigo: item.codigo || `TEMP-${item.id}`
+                });
+                
+                // 🆕 REDUCIR STOCK DE PRODUCTOS REALES
+                if (item.id && !isNaN(parseInt(item.id))) {
+                  await pool.query(
+                    'UPDATE productos SET stock = GREATEST(stock - $1, 0) WHERE id = $2',
+                    [item.cantidad, item.id]
+                  );
+                  
+                  console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${item.cantidad}`);
+                }
+              }
+              
+              // Actualizar datos de entrega si están disponibles
+              if (datosEntrega.torre_entrega) {
+                usuario.torre = datosEntrega.torre_entrega;
+                usuario.piso = datosEntrega.piso_entrega;
+                usuario.apartamento = datosEntrega.apartamento_entrega;
+              }
+              
+              // Limpiar carrito temporal después de usar
+              await pool.query('DELETE FROM carrito_temporal WHERE referencia = $1', [reference]);
+              console.log('🗑️ Carrito temporal eliminado');
+              
+            } else {
+              console.log('⚠️ No se encontró carrito temporal, usando productos estimados...');
+              
+              // FALLBACK: Código original de productos estimados
+              const productosPopulares = await pool.query(`
+                SELECT p.id, p.nombre, p.precio, p.stock
+                FROM productos p
+                WHERE p.stock > 0
+                ORDER BY p.id ASC
+                LIMIT 3
+              `);
+              
+              if (productosPopulares.rows.length > 0) {
+                const montoTotal = transaction.amount_in_cents / 100;
+                let montoRestante = montoTotal;
+                
+                for (const producto of productosPopulares.rows) {
+                  if (montoRestante <= 0) break;
+                  
+                  const cantidad = Math.min(
+                    Math.floor(montoRestante / producto.precio), 
+                    producto.stock,
+                    3
+                  );
+                  
+                  if (cantidad > 0) {
+                    productosReales.push({
+                      id: producto.id,
+                      nombre: producto.nombre,
+                      precio: producto.precio,
+                      cantidad: cantidad,
+                      codigo: `AUTO-${producto.id}`
+                    });
+                    
+                    montoRestante -= (producto.precio * cantidad);
+                  }
+                }
+              }
+              
+              // Si no se pudo crear productos reales, usar uno genérico
+              if (productosReales.length === 0) {
+                productosReales = [{
+                  id: 'webhook-generic',
+                  nombre: 'Pedido procesado por webhook',
+                  cantidad: 1,
+                  precio: transaction.amount_in_cents / 100,
+                  codigo: 'WEBHOOK-AUTO'
+                }];
+              }
+            }
+            
+            // Crear pedido con productos reales
+            const pedidoWebhook = await pool.query(
+              `INSERT INTO pedidos (
+                usuario_id, productos, total, 
+                torre_entrega, piso_entrega, apartamento_entrega,
+                telefono_contacto, payment_reference, payment_status,
+                payment_method, payment_transaction_id, payment_amount_cents, estado
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
+              RETURNING id`,
+              [
+                usuario.id,
+                JSON.stringify(productosReales),
+                transaction.amount_in_cents / 100,
+                usuario.torre,
+                usuario.piso, 
+                usuario.apartamento,
+                'Webhook auto',
+                reference,
+                'APPROVED',
+                paymentMethod, // 🆕 Usar variable en lugar de acceso directo
+                transactionId,
+                transaction.amount_in_cents,
+                'pendiente'
+              ]
+            );
+
+            // 🆕 LOG ESPECÍFICO PARA TARJETAS
+            if (paymentMethod === 'CARD') {
+              console.log(`💳 Pedido con TARJETA ${pedidoWebhook.rows[0].id} creado exitosamente`);
+            } else {
+              console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con productos reales`);
+            }
+
+          } else {
+            console.log(`❌ Usuario no encontrado para email ${transaction.customer_email}`);
+          }
+          
+        } catch (createError) {
+          console.error('❌ Error creando pedido desde webhook:', createError);
+        }
+        
+      } else if (pedidoResult.rows.length > 0) {
         // Actualizar pedido existente
         const pedido = pedidoResult.rows[0];
         
@@ -1238,7 +1253,12 @@ console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con pro
             [transactionId, pedido.id]
           );
           
-          console.log(`✅ Pedido ${pedido.id} actualizado como APROBADO vía webhook`);
+          // 🆕 LOG ESPECÍFICO PARA TARJETAS
+          if (paymentMethod === 'CARD') {
+            console.log(`💳 Pedido con TARJETA ${pedido.id} actualizado como APROBADO vía webhook`);
+          } else {
+            console.log(`✅ Pedido ${pedido.id} actualizado como APROBADO vía webhook`);
+          }
           
         } else if (status === 'DECLINED') {
           await pool.query(
@@ -1246,7 +1266,12 @@ console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con pro
             ['DECLINED', 'cancelado', pedido.id]
           );
           
-          console.log(`❌ Pedido ${pedido.id} marcado como RECHAZADO vía webhook`);
+          // 🆕 LOG ESPECÍFICO PARA TARJETAS
+          if (paymentMethod === 'CARD') {
+            console.log(`💳 Pago con TARJETA ${pedido.id} marcado como RECHAZADO vía webhook`);
+          } else {
+            console.log(`❌ Pedido ${pedido.id} marcado como RECHAZADO vía webhook`);
+          }
         }
       }
     }
@@ -1819,6 +1844,25 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
           payment_description: 'Compra SuperCasa'
         };
         break;
+        case 'CARD':
+  console.log('💳 Procesando pago con tarjeta...');
+  
+  // Verificar que se envió el token de la tarjeta
+  if (!req.body.payment_source_id) {
+    return res.status(400).json({
+      success: false,
+      error: 'Token de tarjeta requerido'
+    });
+  }
+
+  paymentMethod = {
+    type: 'CARD',
+    token: req.body.payment_source_id,
+    installments: req.body.installments || 1
+  };
+  
+  console.log('🔐 Token de tarjeta recibido:', req.body.payment_source_id);
+  break;
 
       default:
         return res.status(400).json({ error: 'Método de pago no soportado' });
@@ -1837,13 +1881,33 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
       personal_data_auth_token: personalDataToken
     };
 
-    // Si es PSE, agregar customer_data
-    if (metodoPago === 'PSE') {
-      transactionData.customer_data = {
-        phone_number: telefono,
-        full_name: req.user.nombre
-      };
-    }
+// Si es PSE, agregar customer_data (con consulta de nombre)
+if (metodoPago === 'PSE') {
+  // ✅ OBTENER NOMBRE DEL USUARIO DESDE BD
+  console.log('🔍 PSE - Obteniendo nombre del usuario:', req.user.userId);
+  
+  const userQuery = await pool.query(
+    'SELECT nombre FROM usuarios WHERE id = $1',
+    [req.user.userId]
+  );
+  
+  const fullName = userQuery.rows.length > 0 ? userQuery.rows[0].nombre : 'Usuario SuperCasa';
+  
+  const customerData = {
+    phone_number: telefono,
+    full_name: fullName  // ✅ AHORA SÍ tiene valor
+  };
+  
+  console.log('🔍 PSE DEBUG - customer_data que se enviará:', customerData);
+  console.log('🔍 PSE DEBUG - full_name obtenido:', fullName);
+  
+  transactionData.customer_data = customerData;
+}
+
+// ✅ LOG COMPLETO DE TRANSACTION DATA
+console.log('📤 PSE DEBUG - transactionData completo:', JSON.stringify(transactionData, null, 2));
+
+console.log(`📤 Enviando transacción ${metodoPago} a WOMPI...`);
 
     console.log(`📤 Enviando transacción ${metodoPago} a WOMPI...`);
 
@@ -1859,13 +1923,13 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
 
     const wompiResult = await wompiResponse.json();
 
-    if (!wompiResponse.ok) {
-      console.error('❌ Error WOMPI:', wompiResult);
-      return res.status(400).json({ 
-        error: 'Error creando pago', 
-        detalles: wompiResult 
-      });
-    }
+   if (!wompiResponse.ok) {
+  console.error('❌ Error WOMPI COMPLETO:', JSON.stringify(wompiResult, null, 2));
+  return res.status(400).json({ 
+    error: 'Error creando pago', 
+    detalles: wompiResult 
+  });
+}
 
     const transaction = wompiResult.data;
     
@@ -1926,11 +1990,14 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
     console.log('🔍 DEBUG - Payment method extra:', transactionDetails.data?.payment_method?.extra);
     console.log('🔍 DEBUG - URL extraída:', transactionDetails.data?.payment_method?.extra?.url);
     
-    // Extraer URL específica para DaviPlata si existe
-    let daviplataUrl = null;
+// Extraer URL específica según método de pago
+    let redirectUrl = null;
     if (metodoPago === 'DAVIPLATA' && transactionDetails.data?.payment_method?.extra?.url) {
-      daviplataUrl = transactionDetails.data.payment_method.extra.url;
-      console.log('🔗 URL DaviPlata encontrada:', daviplataUrl);
+      redirectUrl = transactionDetails.data.payment_method.extra.url;
+      console.log('🔗 URL DaviPlata encontrada:', redirectUrl);
+    } else if (metodoPago === 'PSE' && transactionDetails.data?.payment_method?.extra?.pseURL) {
+      redirectUrl = transactionDetails.data.payment_method.extra.pseURL;
+      console.log('🔗 URL PSE encontrada:', redirectUrl);
     } else if (metodoPago === 'DAVIPLATA') {
       console.log('⚠️ URL DaviPlata no encontrada en extra, intentando consulta adicional...');
       
@@ -1951,15 +2018,15 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
       console.log('🔄 RETRY - Payment method extra:', retryDetails.data?.payment_method?.extra);
       
       if (retryDetails.data?.payment_method?.extra?.url) {
-        daviplataUrl = retryDetails.data.payment_method.extra.url;
-        console.log('🔗 URL DaviPlata encontrada en retry:', daviplataUrl);
+        redirectUrl = retryDetails.data.payment_method.extra.url;
+        console.log('🔗 URL DaviPlata encontrada en retry:', redirectUrl);
       }
     }
 
     // ✅ LOG FINAL ANTES DE ENVIAR RESPUESTA
     console.log('📤 DEBUG - Respuesta final que se envía:', {
       metodoPago,
-      daviplataUrl,
+      redirectUrl,
       payment_method_details: transactionDetails.data?.payment_method
     });
 
@@ -1972,8 +2039,9 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
       metodoPago: metodoPago,
       monto: monto,
       redirectUrl: transaction.redirect_url,
-      // ✅ NUEVO: URL específica para DaviPlata
-      daviplataUrl: daviplataUrl,
+      // ✅ URLs específicas según método de pago
+      daviplataUrl: metodoPago === 'DAVIPLATA' ? redirectUrl : null,
+      pseUrl: metodoPago === 'PSE' ? redirectUrl : null,
       payment_method_type: transaction.payment_method_type,
       // Datos adicionales para debug
       payment_method_details: transactionDetails.data?.payment_method
@@ -1989,6 +2057,74 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
         message: error.message 
       });
     }
+  }
+});
+
+// ===== NUEVO: ENDPOINT PARA TOKENIZAR TARJETAS =====
+app.post('/api/tokenizar-tarjeta', authenticateToken, async (req, res) => {
+  try {
+    const { number, cvc, exp_month, exp_year, card_holder } = req.body;
+    
+    console.log('📝 Iniciando tokenización de tarjeta...');
+    
+    // Validar datos de entrada
+    if (!number || !cvc || !exp_month || !exp_year || !card_holder) {
+      return res.status(400).json({
+        success: false,
+        error: 'Todos los campos de la tarjeta son requeridos'
+      });
+    }
+
+    // Crear token de tarjeta con WOMPI
+    const tokenPayload = {
+      number: number.replace(/\s/g, ''), // Limpiar espacios
+      cvc: cvc,
+      exp_month: exp_month,
+      exp_year: exp_year,
+      card_holder: card_holder.trim().toUpperCase()
+    };
+
+    console.log('🔐 Enviando datos para tokenización:', {
+      number: `****${number.slice(-4)}`,
+      exp_month,
+      exp_year,
+      card_holder
+    });
+
+    const tokenResponse = await fetch('https://api.wompi.co/v1/tokens/cards', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer pub_prod_GkQ7DyAjNXb63f1Imr9OQ1YNHLXd89FT`,
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(tokenPayload)
+    });
+
+    const tokenData = await tokenResponse.json();
+
+    if (!tokenResponse.ok) {
+      console.error('❌ Error en tokenización:', tokenData);
+      return res.status(400).json({
+        success: false,
+        error: tokenData.error?.reason || 'Error al tokenizar la tarjeta',
+        details: tokenData.error
+      });
+    }
+
+    console.log('✅ Tarjeta tokenizada exitosamente:', tokenData.data.id);
+
+    res.json({
+      success: true,
+      data: tokenData.data
+    });
+
+  } catch (error) {
+    console.error('💥 Error en tokenización de tarjeta:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor en tokenización'
+    });
   }
 });
 
