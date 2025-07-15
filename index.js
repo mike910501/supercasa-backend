@@ -134,6 +134,48 @@ pool.query(`
 `).then(() => console.log("✅ Campos de pago WOMPI agregados"))
   .catch(err => console.log("ℹ️ Campos ya existen:", err.message));
 
+// ✅ NUEVAS TABLAS PARA SISTEMA DE PROMOCIONES
+// Crear tabla códigos promocionales
+pool.query(`
+  CREATE TABLE IF NOT EXISTS codigos_promocionales (
+    id SERIAL PRIMARY KEY,
+    codigo VARCHAR(20) UNIQUE NOT NULL,
+    descuento_porcentaje DECIMAL(5,2) DEFAULT 10.00,
+    usado BOOLEAN DEFAULT FALSE,
+    usuario_id INTEGER REFERENCES usuarios(id),
+    fecha_uso TIMESTAMP,
+    fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    activo BOOLEAN DEFAULT TRUE
+  )
+`).then(() => console.log("✅ Tabla 'codigos_promocionales' lista"))
+  .catch(err => console.error("❌ Error creando tabla codigos_promocionales:", err));
+
+// Crear tabla promociones popup
+pool.query(`
+  CREATE TABLE IF NOT EXISTS promociones_popup (
+    id SERIAL PRIMARY KEY,
+    titulo VARCHAR(100) NOT NULL,
+    descripcion TEXT,
+    imagen_url VARCHAR(500),
+    activo BOOLEAN DEFAULT FALSE,
+    fecha_inicio TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    fecha_fin TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`).then(() => console.log("✅ Tabla 'promociones_popup' lista"))
+  .catch(err => console.error("❌ Error creando tabla promociones_popup:", err));
+
+// Agregar campos de descuento a productos existentes
+pool.query(`
+  ALTER TABLE productos 
+  ADD COLUMN IF NOT EXISTS descuento_activo BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS descuento_porcentaje DECIMAL(5,2) DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS descuento_badge_texto VARCHAR(50),
+  ADD COLUMN IF NOT EXISTS descuento_fecha_inicio TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS descuento_fecha_fin TIMESTAMP
+`).then(() => console.log("✅ Campos de descuento agregados a productos"))
+  .catch(err => console.log("ℹ️ Campos ya existen:", err.message));  
+
 // ⚡ Función de validación para datos residenciales
 function validarDatosResidenciales(torre, piso, apartamento) {
   const errores = [];
@@ -519,11 +561,12 @@ app.put('/productos/:id', authenticateToken, requireAdmin, async (req, res) => {
 // 🛍️ RUTAS DE PEDIDOS
 // ===================
 
-// 🛍️ Crear pedido con CONTROL DE STOCK + CÓDIGOS
+// 🛍️ Crear pedido con CONTROL DE STOCK + CÓDIGOS + PROMOCIONES
 app.post('/orders', authenticateToken, async (req, res) => {
   const { 
     productos, 
-    total, 
+    total,
+    codigo_promocional, // NUEVO
     torre_entrega, 
     piso_entrega, 
     apartamento_entrega,
@@ -550,10 +593,30 @@ app.post('/orders', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'El teléfono de contacto es obligatorio' });
     }
 
-    const totalInt = Math.round(Number(total));
+    let totalFinal = Math.round(Number(total));
 
-    if (isNaN(totalInt) || totalInt <= 0) {
-      console.error('🚫 totalPedido inválido:', total);
+    // ✅ APLICAR CÓDIGO PROMOCIONAL SI EXISTE
+    if (codigo_promocional) {
+      console.log(`🎁 Aplicando código promocional: ${codigo_promocional}`);
+      
+      const codigoResult = await pool.query(
+        'SELECT * FROM codigos_promocionales WHERE codigo = $1 AND usado = FALSE AND activo = TRUE',
+        [codigo_promocional.trim().toUpperCase()]
+      );
+      
+      if (codigoResult.rows.length > 0) {
+        const codigoData = codigoResult.rows[0];
+        const descuento = parseFloat(codigoData.descuento_porcentaje);
+        const descuentoMonto = Math.round(totalFinal * (descuento / 100));
+        totalFinal = totalFinal - descuentoMonto;
+        
+        console.log(`✅ Descuento aplicado: ${descuento}% = $${descuentoMonto}`);
+        console.log(`💰 Total final: $${totalFinal}`);
+      }
+    }
+
+    if (isNaN(totalFinal) || totalFinal <= 0) {
+      console.error('🚫 totalPedido inválido:', totalFinal);
       return res.status(400).json({ error: 'Total no válido' });
     }
 
@@ -569,20 +632,20 @@ app.post('/orders', authenticateToken, async (req, res) => {
       }
     }
 
-    // ✅ VERIFICAR STOCK Y OBTENER CÓDIGOS
+    // ✅ VERIFICAR STOCK
     console.log('🔍 Verificando stock de productos...');
     const erroresStock = [];
-    const productosConCodigo = []; // 🎯 NUEVO: Array para productos con código
+    const productosConCodigo = [];
     
     for (const item of productos) {
       const stockQuery = await pool.query(
-        'SELECT id, nombre, stock, codigo FROM productos WHERE id = $1', // 🎯 AGREGADO: codigo
+        'SELECT id, nombre, stock, codigo, descuento_activo, descuento_porcentaje, precio FROM productos WHERE id = $1',
         [item.id]
       );
       
       if (stockQuery.rows.length === 0) {
         erroresStock.push(`Producto ID ${item.id} no encontrado`);
-        continue; // ✅ DENTRO del for loop
+        continue;
       }
       
       const producto = stockQuery.rows[0];
@@ -593,13 +656,21 @@ app.post('/orders', authenticateToken, async (req, res) => {
         erroresStock.push(`${producto.nombre}: Stock insuficiente (disponible: ${stockDisponible}, solicitado: ${cantidadSolicitada})`);
       }
       
-      // 🎯 NUEVO: Agregar producto con código
+      // ✅ APLICAR DESCUENTO POR PRODUCTO SI EXISTE
+      let precioFinal = item.precio;
+      if (producto.descuento_activo && producto.descuento_porcentaje > 0) {
+        precioFinal = Math.round(producto.precio * (100 - producto.descuento_porcentaje) / 100);
+        console.log(`🏷️ Descuento producto ${producto.nombre}: ${producto.descuento_porcentaje}% -> $${precioFinal}`);
+      }
+      
       productosConCodigo.push({
         id: item.id,
         nombre: producto.nombre,
-        precio: item.precio,
+        precio: precioFinal, // Precio con descuento aplicado
+        precio_original: producto.precio,
         cantidad: item.cantidad,
-        codigo: producto.codigo // 🎯 AGREGAR CÓDIGO
+        codigo: producto.codigo,
+        descuento_aplicado: producto.descuento_activo ? producto.descuento_porcentaje : 0
       });
     }
     
@@ -611,8 +682,6 @@ app.post('/orders', authenticateToken, async (req, res) => {
       });
     }
 
-    console.log('✅ Stock verificado correctamente');
-
     const result = await pool.query(
       `INSERT INTO pedidos (
         usuario_id, productos, total, 
@@ -623,8 +692,8 @@ app.post('/orders', authenticateToken, async (req, res) => {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
       [
         req.user.userId, 
-        JSON.stringify(productosConCodigo), // 🎯 USAR PRODUCTOS CON CÓDIGO
-        totalInt,
+        JSON.stringify(productosConCodigo),
+        totalFinal, // Usar total con descuentos aplicados
         torre_entrega,
         piso_entrega, 
         apartamento_entrega,
@@ -638,15 +707,20 @@ app.post('/orders', authenticateToken, async (req, res) => {
       ]
     );
 
-    console.log('✅ Pedido creado exitosamente:', {
-      id: result.rows[0].id,
-      usuario_id: req.user.userId,
-      total: totalInt,
-      payment_reference,
-      piso_entrega: parseInt(piso_entrega)
-    });
+    const pedidoId = result.rows[0].id;
 
-    // ✅ REDUCIR STOCK DESPUÉS DE CREAR PEDIDO EXITOSO
+    // ✅ MARCAR CÓDIGO COMO USADO
+    if (codigo_promocional) {
+      await pool.query(
+        `UPDATE codigos_promocionales 
+         SET usado = TRUE, usuario_id = $1, fecha_uso = CURRENT_TIMESTAMP 
+         WHERE codigo = $2`,
+        [req.user.userId, codigo_promocional.trim().toUpperCase()]
+      );
+      console.log(`✅ Código ${codigo_promocional} marcado como usado`);
+    }
+
+    // ✅ REDUCIR STOCK
     console.log('📦 Reduciendo stock de productos...');
     
     for (const item of productos) {
@@ -660,15 +734,14 @@ app.post('/orders', authenticateToken, async (req, res) => {
       console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${cantidadSolicitada}`);
     }
 
-    console.log('✅ Stock actualizado correctamente');
-
     res.json({ 
       success: true, 
       message: 'Pedido creado exitosamente - Entrega en máximo 20 minutos',
-      pedidoId: result.rows[0].id,
+      pedidoId: pedidoId,
+      totalFinal: totalFinal,
+      descuentoAplicado: codigo_promocional ? true : false,
       entrega: `Torre ${torre_entrega}, Piso ${piso_entrega}, Apt ${apartamento_entrega}`,
-      tiempoEstimado: '20 minutos máximo',
-      pedido: result.rows[0]
+      tiempoEstimado: '20 minutos máximo'
     });
   } catch (err) {
     console.error('❌ Error guardando pedido:', err);
@@ -2394,6 +2467,706 @@ app.get('/debug-daviplata-last', async (req, res) => {
       error: error.message,
       stack: error.stack 
     });
+  }
+});
+
+// ===================
+// 🎁 RUTAS DE PROMOCIONES
+// ===================
+
+app.post('/api/admin/codigos-promocionales/generar', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { cantidad = 2000, descuento = 10 } = req.body;
+    
+    console.log(`🎫 MÉTODO SIMPLE: Generando ${cantidad} códigos uno por uno`);
+    
+    let insertados = 0;
+    let duplicados = 0;
+    
+    for (let i = 1; i <= cantidad; i++) {
+      const numero = i.toString().padStart(4, '0');
+      const codigo = `SC2025A${numero}`;
+      
+      try {
+        const result = await pool.query(
+          'INSERT INTO codigos_promocionales (codigo, descuento_porcentaje) VALUES ($1, $2) ON CONFLICT (codigo) DO NOTHING RETURNING id',
+          [codigo, descuento]
+        );
+        
+        if (result.rows.length > 0) {
+          insertados++;
+        } else {
+          duplicados++;
+        }
+        
+        if (i % 200 === 0) {
+          console.log(`📊 ${i}/${cantidad} - Nuevos: ${insertados}, Ya existían: ${duplicados}`);
+        }
+        
+      } catch (error) {
+        console.error(`❌ Error código ${codigo}:`, error.message);
+      }
+    }
+    
+    console.log(`🎉 COMPLETADO: ${insertados} nuevos, ${duplicados} duplicados`);
+    
+    res.json({
+      success: true,
+      message: `${insertados} códigos nuevos generados`,
+      nuevos: insertados,
+      duplicados: duplicados
+    });
+    
+  } catch (error) {
+    console.error('❌ Error general:', error);
+    res.status(500).json({ error: 'Error generando códigos' });
+  }
+});
+
+// 📄 Obtener todos los códigos promocionales (solo admin)
+app.get('/api/admin/codigos-promocionales/lista', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { estado = 'todos', formato = 'json' } = req.query;
+    
+    let query = 'SELECT codigo, usado, fecha_creacion, fecha_uso FROM codigos_promocionales';
+    let params = [];
+    
+    if (estado === 'disponibles') {
+      query += ' WHERE usado = FALSE';
+    } else if (estado === 'usados') {
+      query += ' WHERE usado = TRUE';
+    }
+    
+    query += ' ORDER BY codigo ASC';
+    
+    const result = await pool.query(query, params);
+    
+    console.log(`📄 Obteniendo ${result.rows.length} códigos (estado: ${estado})`);
+    
+    if (formato === 'csv') {
+      // Generar CSV para imprenta
+      const csvHeader = 'CODIGO,ESTADO,FECHA_CREACION\n';
+      const csvData = result.rows.map(row => 
+        `${row.codigo},${row.usado ? 'USADO' : 'DISPONIBLE'},${row.fecha_creacion.toISOString().split('T')[0]}`
+      ).join('\n');
+      
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="codigos_supercasa.csv"');
+      res.send(csvHeader + csvData);
+    } else if (formato === 'txt') {
+      // Generar TXT simple para imprenta
+      const txtData = result.rows.map(row => row.codigo).join('\n');
+      
+      res.setHeader('Content-Type', 'text/plain');
+      res.setHeader('Content-Disposition', 'attachment; filename="codigos_supercasa.txt"');
+      res.send(txtData);
+    } else {
+      // JSON para el admin
+      res.json({
+        success: true,
+        total: result.rows.length,
+        codigos: result.rows
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo códigos:', error);
+    res.status(500).json({ error: 'Error obteniendo códigos' });
+  }
+});
+
+// 📊 Obtener estadísticas de códigos (solo admin)
+app.get('/api/admin/codigos-promocionales/stats', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const stats = await Promise.all([
+      pool.query('SELECT COUNT(*) as total FROM codigos_promocionales'),
+      pool.query('SELECT COUNT(*) as usados FROM codigos_promocionales WHERE usado = TRUE'),
+      pool.query('SELECT COUNT(*) as disponibles FROM codigos_promocionales WHERE usado = FALSE AND activo = TRUE')
+    ]);
+    
+    res.json({
+      total: parseInt(stats[0].rows[0].total),
+      usados: parseInt(stats[1].rows[0].usados),
+      disponibles: parseInt(stats[2].rows[0].disponibles)
+    });
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo estadísticas:', error);
+    res.status(500).json({ error: 'Error obteniendo estadísticas' });
+  }
+});
+
+// 🎁 Validar código promocional
+app.post('/api/validar-codigo-promocional', authenticateToken, async (req, res) => {
+  try {
+    const { codigo } = req.body;
+    const userId = req.user.userId;
+    
+    if (!codigo) {
+      return res.status(400).json({ 
+        valido: false, 
+        error: 'Código requerido' 
+      });
+    }
+    
+    console.log(`🔍 Validando código: ${codigo} para usuario: ${userId}`);
+    
+    // Buscar código
+    const codigoResult = await pool.query(
+      'SELECT * FROM codigos_promocionales WHERE codigo = $1',
+      [codigo.trim().toUpperCase()]
+    );
+    
+    if (codigoResult.rows.length === 0) {
+      return res.json({ 
+        valido: false, 
+        error: 'Código no válido' 
+      });
+    }
+    
+    const codigoData = codigoResult.rows[0];
+    
+    // Verificar si ya fue usado
+    if (codigoData.usado) {
+      return res.json({ 
+        valido: false, 
+        error: 'Este código ya fue utilizado' 
+      });
+    }
+    
+    // Verificar si está activo
+    if (!codigoData.activo) {
+      return res.json({ 
+        valido: false, 
+        error: 'Código no disponible' 
+      });
+    }
+    
+    // Verificar si es primera compra del usuario
+    const pedidosUsuario = await pool.query(
+      'SELECT COUNT(*) as total FROM pedidos WHERE usuario_id = $1 AND estado != $2',
+      [userId, 'cancelado']
+    );
+    
+    const esPrimeraCompra = parseInt(pedidosUsuario.rows[0].total) === 0;
+    
+    if (!esPrimeraCompra) {
+      return res.json({ 
+        valido: false, 
+        error: 'Este descuento es solo para tu primera compra' 
+      });
+    }
+    
+    console.log(`✅ Código válido: ${codigo}, descuento: ${codigoData.descuento_porcentaje}%`);
+    
+    res.json({
+      valido: true,
+      codigo: codigoData.codigo,
+      descuento: parseFloat(codigoData.descuento_porcentaje),
+      mensaje: `¡Código válido! ${codigoData.descuento_porcentaje}% de descuento aplicado`
+    });
+    
+  } catch (error) {
+    console.error('❌ Error validando código:', error);
+    res.status(500).json({ 
+      valido: false, 
+      error: 'Error validando código' 
+    });
+  }
+});
+
+// 💰 Aplicar código promocional al crear pedido
+app.post('/api/aplicar-codigo-promocional', authenticateToken, async (req, res) => {
+  try {
+    const { codigo, pedido_id } = req.body;
+    const userId = req.user.userId;
+    
+    // Marcar código como usado
+    const result = await pool.query(
+      `UPDATE codigos_promocionales 
+       SET usado = TRUE, usuario_id = $1, fecha_uso = CURRENT_TIMESTAMP 
+       WHERE codigo = $2 AND usado = FALSE 
+       RETURNING *`,
+      [userId, codigo.trim().toUpperCase()]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'Código no válido o ya usado' });
+    }
+    
+    console.log(`✅ Código ${codigo} marcado como usado para pedido ${pedido_id}`);
+    
+    res.json({
+      success: true,
+      message: 'Código aplicado exitosamente',
+      codigo_usado: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('❌ Error aplicando código:', error);
+    res.status(500).json({ error: 'Error aplicando código promocional' });
+  }
+});
+
+// 🖼️ Gestión de promociones popup (admin)
+app.get('/api/promociones-popup', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM promociones_popup WHERE activo = TRUE AND (fecha_fin IS NULL OR fecha_fin > CURRENT_TIMESTAMP) ORDER BY fecha_inicio DESC LIMIT 1'
+    );
+    
+    res.json({
+      activa: result.rows.length > 0,
+      promocion: result.rows[0] || null
+    });
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo promoción popup:', error);
+    res.status(500).json({ error: 'Error obteniendo promoción' });
+  }
+});
+
+// 🎉 Crear promoción popup (admin) - ¡ESTA TE FALTA!
+app.post('/api/admin/promociones-popup', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { titulo, descripcion, imagen_url } = req.body;
+    
+    console.log(`🎉 Creando promoción popup: ${titulo}`);
+    
+    // Desactivar promociones anteriores
+    await pool.query('UPDATE promociones_popup SET activo = FALSE');
+    
+    // Crear nueva promoción
+    const result = await pool.query(
+      `INSERT INTO promociones_popup (titulo, descripcion, imagen_url, activo) 
+       VALUES ($1, $2, $3, TRUE) RETURNING *`,
+      [titulo, descripcion, imagen_url]
+    );
+    
+    console.log(`✅ Promoción popup creada exitosamente: ${titulo}`);
+    
+    res.json({
+      success: true,
+      promocion: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creando promoción popup:', error);
+    res.status(500).json({ error: 'Error creando promoción' });
+  }
+});
+
+// 🗑️ Desactivar promoción popup (admin)
+app.put('/api/admin/promociones-popup/desactivar', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'UPDATE promociones_popup SET activo = FALSE WHERE activo = TRUE RETURNING *'
+    );
+    
+    console.log(`✅ ${result.rowCount} promociones popup desactivadas`);
+    
+    res.json({
+      success: true,
+      message: 'Promociones desactivadas exitosamente',
+      promociones_desactivadas: result.rowCount
+    });
+    
+  } catch (error) {
+    console.error('❌ Error desactivando promociones popup:', error);
+    res.status(500).json({ error: 'Error desactivando promociones' });
+  }
+});
+
+app.post('/api/admin/promociones-popup', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { titulo, descripcion, imagen_url } = req.body;
+    
+    // Desactivar promociones anteriores
+    await pool.query('UPDATE promociones_popup SET activo = FALSE');
+    
+    // Crear nueva promoción
+    const result = await pool.query(
+      `INSERT INTO promociones_popup (titulo, descripcion, imagen_url, activo) 
+       VALUES ($1, $2, $3, TRUE) RETURNING *`,
+      [titulo, descripcion, imagen_url]
+    );
+    
+    console.log(`✅ Promoción popup creada: ${titulo}`);
+    
+    res.json({
+      success: true,
+      promocion: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creando promoción popup:', error);
+    res.status(500).json({ error: 'Error creando promoción' });
+  }
+});
+
+// 🏷️ Gestión de descuentos por producto (admin)
+app.put('/api/admin/productos/:id/descuento', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { 
+      descuento_activo, 
+      descuento_porcentaje, 
+      descuento_badge_texto 
+    } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE productos SET 
+        descuento_activo = $1,
+        descuento_porcentaje = $2,
+        descuento_badge_texto = $3,
+        descuento_fecha_inicio = CASE WHEN $1 = TRUE THEN CURRENT_TIMESTAMP ELSE NULL END
+       WHERE id = $4 
+       RETURNING *`,
+      [descuento_activo, descuento_porcentaje || 0, descuento_badge_texto, id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Producto no encontrado' });
+    }
+    
+    console.log(`✅ Descuento actualizado para producto ${id}: ${descuento_activo ? 'Activado' : 'Desactivado'}`);
+    
+    res.json({
+      success: true,
+      producto: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('❌ Error actualizando descuento:', error);
+    res.status(500).json({ error: 'Error actualizando descuento' });
+  }
+});
+
+// 📄 Obtener productos con descuentos incluidos
+app.get('/productos-con-descuentos', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        *,
+        CASE 
+          WHEN descuento_activo = TRUE AND descuento_porcentaje > 0 
+          THEN ROUND(precio * (100 - descuento_porcentaje) / 100, 0)
+          ELSE precio 
+        END as precio_final
+      FROM productos 
+      ORDER BY id DESC
+    `);
+    
+    res.json(result.rows);
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo productos con descuentos:', error);
+    res.status(500).json({ error: 'Error obteniendo productos' });
+  }
+});
+
+// ===================
+// 🎁 RUTAS DE PROMOCIONES
+// Agregar ANTES del app.listen(3000, ...)
+// ===================
+
+
+// 📝 Generar códigos promocionales (solo admin) - VERSIÓN ULTRA SIMPLE
+app.post('/api/admin/codigos-promocionales/generar', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { cantidad = 2000, descuento = 10 } = req.body;
+    
+    console.log(`🎫 Generando ${cantidad} códigos con ${descuento}% descuento (uno por uno)`);
+    
+    let insertados = 0;
+    let duplicados = 0;
+    
+    // ✅ MÉTODO SIMPLE: UNO POR UNO
+    for (let i = 1; i <= cantidad; i++) {
+      const numero = i.toString().padStart(4, '0');
+      const codigo = `SC2025A${numero}`;
+      
+      try {
+        const result = await pool.query(
+          'INSERT INTO codigos_promocionales (codigo, descuento_porcentaje) VALUES ($1, $2) ON CONFLICT (codigo) DO NOTHING RETURNING id',
+          [codigo, descuento]
+        );
+        
+        if (result.rows.length > 0) {
+          insertados++;
+        } else {
+          duplicados++;
+        }
+        
+        // Log cada 100 códigos para mostrar progreso
+        if (i % 100 === 0) {
+          console.log(`📊 Progreso: ${i}/${cantidad} códigos procesados (${insertados} nuevos, ${duplicados} ya existían)`);
+        }
+        
+      } catch (error) {
+        console.error(`❌ Error insertando código ${codigo}:`, error.message);
+      }
+    }
+    
+    console.log(`🎉 GENERACIÓN COMPLETADA:`);
+    console.log(`   • ${insertados} códigos nuevos creados`);
+    console.log(`   • ${duplicados} códigos ya existían`);
+    console.log(`   • Rango: SC2025A0001 - SC2025A${cantidad.toString().padStart(4, '0')}`);
+    
+    res.json({
+      success: true,
+      message: `Generación completada: ${insertados} códigos nuevos creados`,
+      nuevos: insertados,
+      duplicados: duplicados,
+      total_procesados: cantidad,
+      rango: `SC2025A0001 - SC2025A${cantidad.toString().padStart(4, '0')}`
+    });
+    
+  } catch (error) {
+    console.error('❌ Error general generando códigos:', error);
+    res.status(500).json({ 
+      error: 'Error generando códigos promocionales',
+      details: error.message 
+    });
+  }
+});
+
+// 📊 Obtener estadísticas de códigos (solo admin)
+app.get('/api/admin/codigos-promocionales/stats', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const stats = await Promise.all([
+      pool.query('SELECT COUNT(*) as total FROM codigos_promocionales'),
+      pool.query('SELECT COUNT(*) as usados FROM codigos_promocionales WHERE usado = TRUE'),
+      pool.query('SELECT COUNT(*) as disponibles FROM codigos_promocionales WHERE usado = FALSE AND activo = TRUE')
+    ]);
+    
+    res.json({
+      total: parseInt(stats[0].rows[0].total),
+      usados: parseInt(stats[1].rows[0].usados),
+      disponibles: parseInt(stats[2].rows[0].disponibles)
+    });
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo estadísticas:', error);
+    res.status(500).json({ error: 'Error obteniendo estadísticas' });
+  }
+});
+
+// 🎁 Validar código promocional
+app.post('/api/validar-codigo-promocional', authenticateToken, async (req, res) => {
+  try {
+    const { codigo } = req.body;
+    const userId = req.user.userId;
+    
+    if (!codigo) {
+      return res.status(400).json({ 
+        valido: false, 
+        error: 'Código requerido' 
+      });
+    }
+    
+    console.log(`🔍 Validando código: ${codigo} para usuario: ${userId}`);
+    
+    // Buscar código
+    const codigoResult = await pool.query(
+      'SELECT * FROM codigos_promocionales WHERE codigo = $1',
+      [codigo.trim().toUpperCase()]
+    );
+    
+    if (codigoResult.rows.length === 0) {
+      return res.json({ 
+        valido: false, 
+        error: 'Código no válido' 
+      });
+    }
+    
+    const codigoData = codigoResult.rows[0];
+    
+    // Verificar si ya fue usado
+    if (codigoData.usado) {
+      return res.json({ 
+        valido: false, 
+        error: 'Este código ya fue utilizado' 
+      });
+    }
+    
+    // Verificar si está activo
+    if (!codigoData.activo) {
+      return res.json({ 
+        valido: false, 
+        error: 'Código no disponible' 
+      });
+    }
+    
+    // Verificar si es primera compra del usuario
+    const pedidosUsuario = await pool.query(
+      'SELECT COUNT(*) as total FROM pedidos WHERE usuario_id = $1 AND estado != $2',
+      [userId, 'cancelado']
+    );
+    
+    const esPrimeraCompra = parseInt(pedidosUsuario.rows[0].total) === 0;
+    
+    if (!esPrimeraCompra) {
+      return res.json({ 
+        valido: false, 
+        error: 'Este descuento es solo para tu primera compra' 
+      });
+    }
+    
+    console.log(`✅ Código válido: ${codigo}, descuento: ${codigoData.descuento_porcentaje}%`);
+    
+    res.json({
+      valido: true,
+      codigo: codigoData.codigo,
+      descuento: parseFloat(codigoData.descuento_porcentaje),
+      mensaje: `¡Código válido! ${codigoData.descuento_porcentaje}% de descuento aplicado`
+    });
+    
+  } catch (error) {
+    console.error('❌ Error validando código:', error);
+    res.status(500).json({ 
+      valido: false, 
+      error: 'Error validando código' 
+    });
+  }
+});
+
+// 💰 Aplicar código promocional al crear pedido
+app.post('/api/aplicar-codigo-promocional', authenticateToken, async (req, res) => {
+  try {
+    const { codigo, pedido_id } = req.body;
+    const userId = req.user.userId;
+    
+    // Marcar código como usado
+    const result = await pool.query(
+      `UPDATE codigos_promocionales 
+       SET usado = TRUE, usuario_id = $1, fecha_uso = CURRENT_TIMESTAMP 
+       WHERE codigo = $2 AND usado = FALSE 
+       RETURNING *`,
+      [userId, codigo.trim().toUpperCase()]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'Código no válido o ya usado' });
+    }
+    
+    console.log(`✅ Código ${codigo} marcado como usado para pedido ${pedido_id}`);
+    
+    res.json({
+      success: true,
+      message: 'Código aplicado exitosamente',
+      codigo_usado: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('❌ Error aplicando código:', error);
+    res.status(500).json({ error: 'Error aplicando código promocional' });
+  }
+});
+
+// 🖼️ Gestión de promociones popup (admin)
+app.get('/api/promociones-popup', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM promociones_popup WHERE activo = TRUE AND (fecha_fin IS NULL OR fecha_fin > CURRENT_TIMESTAMP) ORDER BY fecha_inicio DESC LIMIT 1'
+    );
+    
+    res.json({
+      activa: result.rows.length > 0,
+      promocion: result.rows[0] || null
+    });
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo promoción popup:', error);
+    res.status(500).json({ error: 'Error obteniendo promoción' });
+  }
+});
+
+app.post('/api/admin/promociones-popup', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { titulo, descripcion, imagen_url } = req.body;
+    
+    // Desactivar promociones anteriores
+    await pool.query('UPDATE promociones_popup SET activo = FALSE');
+    
+    // Crear nueva promoción
+    const result = await pool.query(
+      `INSERT INTO promociones_popup (titulo, descripcion, imagen_url, activo) 
+       VALUES ($1, $2, $3, TRUE) RETURNING *`,
+      [titulo, descripcion, imagen_url]
+    );
+    
+    console.log(`✅ Promoción popup creada: ${titulo}`);
+    
+    res.json({
+      success: true,
+      promocion: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creando promoción popup:', error);
+    res.status(500).json({ error: 'Error creando promoción' });
+  }
+});
+
+// 🏷️ Gestión de descuentos por producto (admin)
+app.put('/api/admin/productos/:id/descuento', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { 
+      descuento_activo, 
+      descuento_porcentaje, 
+      descuento_badge_texto 
+    } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE productos SET 
+        descuento_activo = $1,
+        descuento_porcentaje = $2,
+        descuento_badge_texto = $3,
+        descuento_fecha_inicio = CASE WHEN $1 = TRUE THEN CURRENT_TIMESTAMP ELSE NULL END
+       WHERE id = $4 
+       RETURNING *`,
+      [descuento_activo, descuento_porcentaje || 0, descuento_badge_texto, id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Producto no encontrado' });
+    }
+    
+    console.log(`✅ Descuento actualizado para producto ${id}: ${descuento_activo ? 'Activado' : 'Desactivado'}`);
+    
+    res.json({
+      success: true,
+      producto: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('❌ Error actualizando descuento:', error);
+    res.status(500).json({ error: 'Error actualizando descuento' });
+  }
+});
+
+// 📄 Obtener productos con descuentos incluidos
+app.get('/productos-con-descuentos', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        *,
+        CASE 
+          WHEN descuento_activo = TRUE AND descuento_porcentaje > 0 
+          THEN ROUND(precio * (100 - descuento_porcentaje) / 100, 0)
+          ELSE precio 
+        END as precio_final
+      FROM productos 
+      ORDER BY id DESC
+    `);
+    
+    res.json(result.rows);
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo productos con descuentos:', error);
+    res.status(500).json({ error: 'Error obteniendo productos' });
   }
 });
 
