@@ -2474,54 +2474,6 @@ app.get('/debug-daviplata-last', async (req, res) => {
 // 🎁 RUTAS DE PROMOCIONES
 // ===================
 
-app.post('/api/admin/codigos-promocionales/generar', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const { cantidad = 2000, descuento = 10 } = req.body;
-    
-    console.log(`🎫 MÉTODO SIMPLE: Generando ${cantidad} códigos uno por uno`);
-    
-    let insertados = 0;
-    let duplicados = 0;
-    
-    for (let i = 1; i <= cantidad; i++) {
-      const numero = i.toString().padStart(4, '0');
-      const codigo = `SC2025A${numero}`;
-      
-      try {
-        const result = await pool.query(
-          'INSERT INTO codigos_promocionales (codigo, descuento_porcentaje) VALUES ($1, $2) ON CONFLICT (codigo) DO NOTHING RETURNING id',
-          [codigo, descuento]
-        );
-        
-        if (result.rows.length > 0) {
-          insertados++;
-        } else {
-          duplicados++;
-        }
-        
-        if (i % 200 === 0) {
-          console.log(`📊 ${i}/${cantidad} - Nuevos: ${insertados}, Ya existían: ${duplicados}`);
-        }
-        
-      } catch (error) {
-        console.error(`❌ Error código ${codigo}:`, error.message);
-      }
-    }
-    
-    console.log(`🎉 COMPLETADO: ${insertados} nuevos, ${duplicados} duplicados`);
-    
-    res.json({
-      success: true,
-      message: `${insertados} códigos nuevos generados`,
-      nuevos: insertados,
-      duplicados: duplicados
-    });
-    
-  } catch (error) {
-    console.error('❌ Error general:', error);
-    res.status(500).json({ error: 'Error generando códigos' });
-  }
-});
 
 // 📄 Obtener todos los códigos promocionales (solo admin)
 app.get('/api/admin/codigos-promocionales/lista', authenticateToken, requireAdmin, async (req, res) => {
@@ -2596,16 +2548,15 @@ app.get('/api/admin/codigos-promocionales/stats', authenticateToken, requireAdmi
   }
 });
 
-// 🎁 Validar código promocional
 app.post('/api/validar-codigo-promocional', authenticateToken, async (req, res) => {
   try {
     const { codigo } = req.body;
     const userId = req.user.userId;
     
     if (!codigo) {
-      return res.status(400).json({ 
-        valido: false, 
-        error: 'Código requerido' 
+      return res.status(400).json({
+        valido: false,
+        error: 'Código requerido'
       });
     }
     
@@ -2618,9 +2569,9 @@ app.post('/api/validar-codigo-promocional', authenticateToken, async (req, res) 
     );
     
     if (codigoResult.rows.length === 0) {
-      return res.json({ 
-        valido: false, 
-        error: 'Código no válido' 
+      return res.json({
+        valido: false,
+        error: 'Código no válido'
       });
     }
     
@@ -2628,49 +2579,69 @@ app.post('/api/validar-codigo-promocional', authenticateToken, async (req, res) 
     
     // Verificar si ya fue usado
     if (codigoData.usado) {
-      return res.json({ 
-        valido: false, 
-        error: 'Este código ya fue utilizado' 
+      return res.json({
+        valido: false,
+        error: 'Este código ya fue utilizado'
       });
     }
     
     // Verificar si está activo
     if (!codigoData.activo) {
-      return res.json({ 
-        valido: false, 
-        error: 'Código no disponible' 
+      return res.json({
+        valido: false,
+        error: 'Código no disponible'
       });
     }
     
-    // Verificar si es primera compra del usuario
-    const pedidosUsuario = await pool.query(
-      'SELECT COUNT(*) as total FROM pedidos WHERE usuario_id = $1 AND estado != $2',
-      [userId, 'cancelado']
-    );
+    // 🆕 NUEVA LÓGICA POR TIPO DE CUPÓN
+    const tipoCupon = codigoData.tipo || 'bienvenida';
     
-    const esPrimeraCompra = parseInt(pedidosUsuario.rows[0].total) === 0;
-    
-    if (!esPrimeraCompra) {
-      return res.json({ 
-        valido: false, 
-        error: 'Este descuento es solo para tu primera compra' 
-      });
+    if (tipoCupon === 'bienvenida') {
+      // Solo primera compra
+      const pedidosUsuario = await pool.query(
+        'SELECT COUNT(*) as total FROM pedidos WHERE usuario_id = $1 AND estado != $2',
+        [userId, 'cancelado']
+      );
+      
+      const esPrimeraCompra = parseInt(pedidosUsuario.rows[0].total) === 0;
+      
+      if (!esPrimeraCompra) {
+        return res.json({
+          valido: false,
+          error: 'Este descuento es solo para tu primera compra'
+        });
+      }
+    } else if (tipoCupon === 'usuario_unico') {
+      // Una vez por usuario (independiente de cuántos pedidos tenga)
+      const codigoUsadoPorUsuario = await pool.query(
+        'SELECT COUNT(*) as total FROM codigos_promocionales WHERE usuario_id = $1 AND usado = TRUE',
+        [userId]
+      );
+      
+      if (parseInt(codigoUsadoPorUsuario.rows[0].total) > 0) {
+        return res.json({
+          valido: false,
+          error: 'Ya has usado un código promocional anteriormente'
+        });
+      }
     }
+    // Si es tipo 'general', no hay restricciones adicionales
     
-    console.log(`✅ Código válido: ${codigo}, descuento: ${codigoData.descuento_porcentaje}%`);
+    console.log(`✅ Código válido: ${codigo}, tipo: ${tipoCupon}, descuento: ${codigoData.descuento_porcentaje}%`);
     
     res.json({
       valido: true,
       codigo: codigoData.codigo,
       descuento: parseFloat(codigoData.descuento_porcentaje),
+      tipo: tipoCupon,
       mensaje: `¡Código válido! ${codigoData.descuento_porcentaje}% de descuento aplicado`
     });
     
   } catch (error) {
     console.error('❌ Error validando código:', error);
-    res.status(500).json({ 
-      valido: false, 
-      error: 'Error validando código' 
+    res.status(500).json({
+      valido: false,
+      error: 'Error validando código'
     });
   }
 });
@@ -2870,66 +2841,60 @@ app.get('/productos-con-descuentos', async (req, res) => {
 // Agregar ANTES del app.listen(3000, ...)
 // ===================
 
-
-// 📝 Generar códigos promocionales (solo admin) - VERSIÓN ULTRA SIMPLE
 app.post('/api/admin/codigos-promocionales/generar', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { cantidad = 2000, descuento = 10 } = req.body;
+    console.log('🔥 ENDPOINT EJECUTADO - req.body:', req.body);
     
-    console.log(`🎫 Generando ${cantidad} códigos con ${descuento}% descuento (uno por uno)`);
+    const { cantidad = 2000, descuento = 10, tipo = 'bienvenida' } = req.body;
     
-    let insertados = 0;
+    console.log(`🎁 Generando ${cantidad} códigos tipo: ${tipo}, descuento: ${descuento}%`);
+    
+    const año = new Date().getFullYear();
+    // 🆕 LETRA DINÁMICA SEGÚN TIPO
+    const letra = tipo === 'general' ? 'G' : 
+                  tipo === 'usuario_unico' ? 'U' : 'A';
+    
+    console.log(`📝 Usando letra: ${letra} para tipo: ${tipo}`);
+    
+    let nuevos = 0;
     let duplicados = 0;
     
-    // ✅ MÉTODO SIMPLE: UNO POR UNO
     for (let i = 1; i <= cantidad; i++) {
-      const numero = i.toString().padStart(4, '0');
-      const codigo = `SC2025A${numero}`;
+      const numero = String(i).padStart(4, '0');
+      const codigo = `SC${año}${letra}${numero}`;
       
       try {
-        const result = await pool.query(
-          'INSERT INTO codigos_promocionales (codigo, descuento_porcentaje) VALUES ($1, $2) ON CONFLICT (codigo) DO NOTHING RETURNING id',
-          [codigo, descuento]
+        await pool.query(
+          `INSERT INTO codigos_promocionales (codigo, descuento_porcentaje, activo, tipo) 
+           VALUES ($1, $2, TRUE, $3)`,
+          [codigo, descuento, tipo]
         );
-        
-        if (result.rows.length > 0) {
-          insertados++;
-        } else {
-          duplicados++;
-        }
-        
-        // Log cada 100 códigos para mostrar progreso
-        if (i % 100 === 0) {
-          console.log(`📊 Progreso: ${i}/${cantidad} códigos procesados (${insertados} nuevos, ${duplicados} ya existían)`);
-        }
-        
+        nuevos++;
       } catch (error) {
-        console.error(`❌ Error insertando código ${codigo}:`, error.message);
+        if (error.code === '23505') { // Duplicate key
+          duplicados++;
+        } else {
+          throw error;
+        }
       }
     }
     
-    console.log(`🎉 GENERACIÓN COMPLETADA:`);
-    console.log(`   • ${insertados} códigos nuevos creados`);
-    console.log(`   • ${duplicados} códigos ya existían`);
-    console.log(`   • Rango: SC2025A0001 - SC2025A${cantidad.toString().padStart(4, '0')}`);
+    console.log(`✅ Generación completada: ${nuevos} nuevos, ${duplicados} duplicados`);
     
     res.json({
       success: true,
-      message: `Generación completada: ${insertados} códigos nuevos creados`,
-      nuevos: insertados,
-      duplicados: duplicados,
-      total_procesados: cantidad,
-      rango: `SC2025A0001 - SC2025A${cantidad.toString().padStart(4, '0')}`
+      message: `Códigos ${tipo} generados exitosamente`,
+      nuevos,
+      duplicados,
+      tipo
     });
     
   } catch (error) {
-    console.error('❌ Error general generando códigos:', error);
-    res.status(500).json({ 
-      error: 'Error generando códigos promocionales',
-      details: error.message 
-    });
+    console.error('❌ Error generando códigos:', error);
+    res.status(500).json({ error: 'Error generando códigos' });
   }
 });
+
 
 // 📊 Obtener estadísticas de códigos (solo admin)
 app.get('/api/admin/codigos-promocionales/stats', authenticateToken, requireAdmin, async (req, res) => {
@@ -3167,6 +3132,51 @@ app.get('/productos-con-descuentos', async (req, res) => {
   } catch (error) {
     console.error('❌ Error obteniendo productos con descuentos:', error);
     res.status(500).json({ error: 'Error obteniendo productos' });
+  }
+});
+
+// 🗑️ Eliminar códigos promocionales (solo admin)
+app.delete('/api/admin/codigos-promocionales/eliminar', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { codigos, tipo_eliminacion } = req.body;
+    
+    let result;
+    
+    if (tipo_eliminacion === 'todos_no_usados') {
+      // Eliminar todos los códigos no usados
+      result = await pool.query(
+        'DELETE FROM codigos_promocionales WHERE usado = FALSE'
+      );
+      console.log(`🗑️ Eliminados ${result.rowCount} códigos no usados`);
+    } else if (tipo_eliminacion === 'por_tipo') {
+      // Eliminar por tipo específico
+      const { tipo } = req.body;
+      result = await pool.query(
+        'DELETE FROM codigos_promocionales WHERE tipo = $1 AND usado = FALSE',
+        [tipo]
+      );
+      console.log(`🗑️ Eliminados ${result.rowCount} códigos tipo "${tipo}" no usados`);
+    } else if (tipo_eliminacion === 'especificos' && codigos && codigos.length > 0) {
+      // Eliminar códigos específicos
+      const placeholders = codigos.map((_, index) => `$${index + 1}`).join(',');
+      result = await pool.query(
+        `DELETE FROM codigos_promocionales WHERE codigo IN (${placeholders})`,
+        codigos
+      );
+      console.log(`🗑️ Eliminados ${result.rowCount} códigos específicos`);
+    } else {
+      return res.status(400).json({ error: 'Tipo de eliminación no válido' });
+    }
+    
+    res.json({
+      success: true,
+      message: `${result.rowCount} códigos eliminados exitosamente`,
+      eliminados: result.rowCount
+    });
+    
+  } catch (error) {
+    console.error('❌ Error eliminando códigos:', error);
+    res.status(500).json({ error: 'Error eliminando códigos' });
   }
 });
 
