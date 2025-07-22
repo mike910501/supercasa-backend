@@ -1,9 +1,13 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import cors from 'cors';
 import pkg from 'pg';
 import fetch from 'node-fetch';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import twilio from 'twilio';  // ← AGREGAR ESTA LÍNEA
 
 const { Pool } = pkg;
 const app = express();
@@ -11,11 +15,11 @@ app.use(cors());
 app.use(express.json());
 
 // 🔐 JWT Secret (en producción, usar variable de entorno)
-const JWT_SECRET = 'tu_clave_secreta_super_segura_2024';
+const JWT_SECRET = process.env.JWT_SECRET || 'tu_clave_secreta_super_segura_2024';
 
 // 🧠 Conexión a base de datos Railway
 const pool = new Pool({
-  connectionString: "postgresql://postgres:tdeuoDrXTBJvFcCnbiehngvItJYFSdtX@gondola.proxy.rlwy.net:50352/railway",
+  connectionString: process.env.DATABASE_URL || "postgresql://postgres:tdeuoDrXTBJvFcCnbiehngvItJYFSdtX@gondola.proxy.rlwy.net:50352/railway",
   ssl: { rejectUnauthorized: false }
 });
 
@@ -734,15 +738,37 @@ app.post('/orders', authenticateToken, async (req, res) => {
       console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${cantidadSolicitada}`);
     }
 
-    res.json({ 
-      success: true, 
-      message: 'Pedido creado exitosamente - Entrega en máximo 20 minutos',
-      pedidoId: pedidoId,
-      totalFinal: totalFinal,
-      descuentoAplicado: codigo_promocional ? true : false,
-      entrega: `Torre ${torre_entrega}, Piso ${piso_entrega}, Apt ${apartamento_entrega}`,
-      tiempoEstimado: '20 minutos máximo'
-    });
+    // ✅ NUEVO: ENVIAR CONFIRMACIÓN WHATSAPP
+const pedidoCompleto = {
+  id: pedidoId,
+  total: totalFinal,
+  telefono_contacto,
+  torre_entrega,
+  piso_entrega,
+  apartamento_entrega,
+  productos: productosConCodigo
+};
+
+// Enviar WhatsApp confirmación (sin esperar)
+enviarConfirmacionWhatsApp(pedidoCompleto).then(result => {
+  if (result.success) {
+    console.log(`📱 Confirmación WhatsApp enviada para pedido ${pedidoId}`);
+  } else {
+    console.error(`📱 Error WhatsApp pedido ${pedidoId}:`, result.error);
+  }
+});
+
+res.json({ 
+  success: true, 
+  message: 'Pedido creado exitosamente - Confirmación enviada por WhatsApp',
+  pedidoId: pedidoId,
+  totalFinal: totalFinal,
+  descuentoAplicado: codigo_promocional ? true : false,
+  entrega: `Torre ${torre_entrega}, Piso ${piso_entrega}, Apt ${apartamento_entrega}`,
+  tiempoEstimado: '20 minutos máximo',
+  whatsapp: 'Confirmación enviada' // ✅ NUEVO
+  
+});
   } catch (err) {
     console.error('❌ Error guardando pedido:', err);
     res.status(500).json({ error: 'Error guardando pedido' });
@@ -2474,54 +2500,6 @@ app.get('/debug-daviplata-last', async (req, res) => {
 // 🎁 RUTAS DE PROMOCIONES
 // ===================
 
-app.post('/api/admin/codigos-promocionales/generar', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const { cantidad = 2000, descuento = 10 } = req.body;
-    
-    console.log(`🎫 MÉTODO SIMPLE: Generando ${cantidad} códigos uno por uno`);
-    
-    let insertados = 0;
-    let duplicados = 0;
-    
-    for (let i = 1; i <= cantidad; i++) {
-      const numero = i.toString().padStart(4, '0');
-      const codigo = `SC2025A${numero}`;
-      
-      try {
-        const result = await pool.query(
-          'INSERT INTO codigos_promocionales (codigo, descuento_porcentaje) VALUES ($1, $2) ON CONFLICT (codigo) DO NOTHING RETURNING id',
-          [codigo, descuento]
-        );
-        
-        if (result.rows.length > 0) {
-          insertados++;
-        } else {
-          duplicados++;
-        }
-        
-        if (i % 200 === 0) {
-          console.log(`📊 ${i}/${cantidad} - Nuevos: ${insertados}, Ya existían: ${duplicados}`);
-        }
-        
-      } catch (error) {
-        console.error(`❌ Error código ${codigo}:`, error.message);
-      }
-    }
-    
-    console.log(`🎉 COMPLETADO: ${insertados} nuevos, ${duplicados} duplicados`);
-    
-    res.json({
-      success: true,
-      message: `${insertados} códigos nuevos generados`,
-      nuevos: insertados,
-      duplicados: duplicados
-    });
-    
-  } catch (error) {
-    console.error('❌ Error general:', error);
-    res.status(500).json({ error: 'Error generando códigos' });
-  }
-});
 
 // 📄 Obtener todos los códigos promocionales (solo admin)
 app.get('/api/admin/codigos-promocionales/lista', authenticateToken, requireAdmin, async (req, res) => {
@@ -2596,16 +2574,15 @@ app.get('/api/admin/codigos-promocionales/stats', authenticateToken, requireAdmi
   }
 });
 
-// 🎁 Validar código promocional
 app.post('/api/validar-codigo-promocional', authenticateToken, async (req, res) => {
   try {
     const { codigo } = req.body;
     const userId = req.user.userId;
     
     if (!codigo) {
-      return res.status(400).json({ 
-        valido: false, 
-        error: 'Código requerido' 
+      return res.status(400).json({
+        valido: false,
+        error: 'Código requerido'
       });
     }
     
@@ -2618,9 +2595,9 @@ app.post('/api/validar-codigo-promocional', authenticateToken, async (req, res) 
     );
     
     if (codigoResult.rows.length === 0) {
-      return res.json({ 
-        valido: false, 
-        error: 'Código no válido' 
+      return res.json({
+        valido: false,
+        error: 'Código no válido'
       });
     }
     
@@ -2628,49 +2605,69 @@ app.post('/api/validar-codigo-promocional', authenticateToken, async (req, res) 
     
     // Verificar si ya fue usado
     if (codigoData.usado) {
-      return res.json({ 
-        valido: false, 
-        error: 'Este código ya fue utilizado' 
+      return res.json({
+        valido: false,
+        error: 'Este código ya fue utilizado'
       });
     }
     
     // Verificar si está activo
     if (!codigoData.activo) {
-      return res.json({ 
-        valido: false, 
-        error: 'Código no disponible' 
+      return res.json({
+        valido: false,
+        error: 'Código no disponible'
       });
     }
     
-    // Verificar si es primera compra del usuario
-    const pedidosUsuario = await pool.query(
-      'SELECT COUNT(*) as total FROM pedidos WHERE usuario_id = $1 AND estado != $2',
-      [userId, 'cancelado']
-    );
+    // 🆕 NUEVA LÓGICA POR TIPO DE CUPÓN
+    const tipoCupon = codigoData.tipo || 'bienvenida';
     
-    const esPrimeraCompra = parseInt(pedidosUsuario.rows[0].total) === 0;
-    
-    if (!esPrimeraCompra) {
-      return res.json({ 
-        valido: false, 
-        error: 'Este descuento es solo para tu primera compra' 
-      });
+    if (tipoCupon === 'bienvenida') {
+      // Solo primera compra
+      const pedidosUsuario = await pool.query(
+        'SELECT COUNT(*) as total FROM pedidos WHERE usuario_id = $1 AND estado != $2',
+        [userId, 'cancelado']
+      );
+      
+      const esPrimeraCompra = parseInt(pedidosUsuario.rows[0].total) === 0;
+      
+      if (!esPrimeraCompra) {
+        return res.json({
+          valido: false,
+          error: 'Este descuento es solo para tu primera compra'
+        });
+      }
+    } else if (tipoCupon === 'usuario_unico') {
+      // Una vez por usuario (independiente de cuántos pedidos tenga)
+      const codigoUsadoPorUsuario = await pool.query(
+        'SELECT COUNT(*) as total FROM codigos_promocionales WHERE usuario_id = $1 AND usado = TRUE',
+        [userId]
+      );
+      
+      if (parseInt(codigoUsadoPorUsuario.rows[0].total) > 0) {
+        return res.json({
+          valido: false,
+          error: 'Ya has usado un código promocional anteriormente'
+        });
+      }
     }
+    // Si es tipo 'general', no hay restricciones adicionales
     
-    console.log(`✅ Código válido: ${codigo}, descuento: ${codigoData.descuento_porcentaje}%`);
+    console.log(`✅ Código válido: ${codigo}, tipo: ${tipoCupon}, descuento: ${codigoData.descuento_porcentaje}%`);
     
     res.json({
       valido: true,
       codigo: codigoData.codigo,
       descuento: parseFloat(codigoData.descuento_porcentaje),
+      tipo: tipoCupon,
       mensaje: `¡Código válido! ${codigoData.descuento_porcentaje}% de descuento aplicado`
     });
     
   } catch (error) {
     console.error('❌ Error validando código:', error);
-    res.status(500).json({ 
-      valido: false, 
-      error: 'Error validando código' 
+    res.status(500).json({
+      valido: false,
+      error: 'Error validando código'
     });
   }
 });
@@ -2870,66 +2867,60 @@ app.get('/productos-con-descuentos', async (req, res) => {
 // Agregar ANTES del app.listen(3000, ...)
 // ===================
 
-
-// 📝 Generar códigos promocionales (solo admin) - VERSIÓN ULTRA SIMPLE
 app.post('/api/admin/codigos-promocionales/generar', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { cantidad = 2000, descuento = 10 } = req.body;
+    console.log('🔥 ENDPOINT EJECUTADO - req.body:', req.body);
     
-    console.log(`🎫 Generando ${cantidad} códigos con ${descuento}% descuento (uno por uno)`);
+    const { cantidad = 2000, descuento = 10, tipo = 'bienvenida' } = req.body;
     
-    let insertados = 0;
+    console.log(`🎁 Generando ${cantidad} códigos tipo: ${tipo}, descuento: ${descuento}%`);
+    
+    const año = new Date().getFullYear();
+    // 🆕 LETRA DINÁMICA SEGÚN TIPO
+    const letra = tipo === 'general' ? 'G' : 
+                  tipo === 'usuario_unico' ? 'U' : 'A';
+    
+    console.log(`📝 Usando letra: ${letra} para tipo: ${tipo}`);
+    
+    let nuevos = 0;
     let duplicados = 0;
     
-    // ✅ MÉTODO SIMPLE: UNO POR UNO
     for (let i = 1; i <= cantidad; i++) {
-      const numero = i.toString().padStart(4, '0');
-      const codigo = `SC2025A${numero}`;
+      const numero = String(i).padStart(4, '0');
+      const codigo = `SC${año}${letra}${numero}`;
       
       try {
-        const result = await pool.query(
-          'INSERT INTO codigos_promocionales (codigo, descuento_porcentaje) VALUES ($1, $2) ON CONFLICT (codigo) DO NOTHING RETURNING id',
-          [codigo, descuento]
+        await pool.query(
+          `INSERT INTO codigos_promocionales (codigo, descuento_porcentaje, activo, tipo) 
+           VALUES ($1, $2, TRUE, $3)`,
+          [codigo, descuento, tipo]
         );
-        
-        if (result.rows.length > 0) {
-          insertados++;
-        } else {
-          duplicados++;
-        }
-        
-        // Log cada 100 códigos para mostrar progreso
-        if (i % 100 === 0) {
-          console.log(`📊 Progreso: ${i}/${cantidad} códigos procesados (${insertados} nuevos, ${duplicados} ya existían)`);
-        }
-        
+        nuevos++;
       } catch (error) {
-        console.error(`❌ Error insertando código ${codigo}:`, error.message);
+        if (error.code === '23505') { // Duplicate key
+          duplicados++;
+        } else {
+          throw error;
+        }
       }
     }
     
-    console.log(`🎉 GENERACIÓN COMPLETADA:`);
-    console.log(`   • ${insertados} códigos nuevos creados`);
-    console.log(`   • ${duplicados} códigos ya existían`);
-    console.log(`   • Rango: SC2025A0001 - SC2025A${cantidad.toString().padStart(4, '0')}`);
+    console.log(`✅ Generación completada: ${nuevos} nuevos, ${duplicados} duplicados`);
     
     res.json({
       success: true,
-      message: `Generación completada: ${insertados} códigos nuevos creados`,
-      nuevos: insertados,
-      duplicados: duplicados,
-      total_procesados: cantidad,
-      rango: `SC2025A0001 - SC2025A${cantidad.toString().padStart(4, '0')}`
+      message: `Códigos ${tipo} generados exitosamente`,
+      nuevos,
+      duplicados,
+      tipo
     });
     
   } catch (error) {
-    console.error('❌ Error general generando códigos:', error);
-    res.status(500).json({ 
-      error: 'Error generando códigos promocionales',
-      details: error.message 
-    });
+    console.error('❌ Error generando códigos:', error);
+    res.status(500).json({ error: 'Error generando códigos' });
   }
 });
+
 
 // 📊 Obtener estadísticas de códigos (solo admin)
 app.get('/api/admin/codigos-promocionales/stats', authenticateToken, requireAdmin, async (req, res) => {
@@ -3169,6 +3160,412 @@ app.get('/productos-con-descuentos', async (req, res) => {
     res.status(500).json({ error: 'Error obteniendo productos' });
   }
 });
+
+// 🗑️ Eliminar códigos promocionales (solo admin)
+app.delete('/api/admin/codigos-promocionales/eliminar', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { codigos, tipo_eliminacion } = req.body;
+    
+    let result;
+    
+    if (tipo_eliminacion === 'todos_no_usados') {
+      // Eliminar todos los códigos no usados
+      result = await pool.query(
+        'DELETE FROM codigos_promocionales WHERE usado = FALSE'
+      );
+      console.log(`🗑️ Eliminados ${result.rowCount} códigos no usados`);
+    } else if (tipo_eliminacion === 'por_tipo') {
+      // Eliminar por tipo específico
+      const { tipo } = req.body;
+      result = await pool.query(
+        'DELETE FROM codigos_promocionales WHERE tipo = $1 AND usado = FALSE',
+        [tipo]
+      );
+      console.log(`🗑️ Eliminados ${result.rowCount} códigos tipo "${tipo}" no usados`);
+    } else if (tipo_eliminacion === 'especificos' && codigos && codigos.length > 0) {
+      // Eliminar códigos específicos
+      const placeholders = codigos.map((_, index) => `$${index + 1}`).join(',');
+      result = await pool.query(
+        `DELETE FROM codigos_promocionales WHERE codigo IN (${placeholders})`,
+        codigos
+      );
+      console.log(`🗑️ Eliminados ${result.rowCount} códigos específicos`);
+    } else {
+      return res.status(400).json({ error: 'Tipo de eliminación no válido' });
+    }
+    
+    res.json({
+      success: true,
+      message: `${result.rowCount} códigos eliminados exitosamente`,
+      eliminados: result.rowCount
+    });
+    
+  } catch (error) {
+    console.error('❌ Error eliminando códigos:', error);
+    res.status(500).json({ error: 'Error eliminando códigos' });
+  }
+});
+
+// ===================================
+// 📱 TWILIO WHATSAPP PARA SUPERCASA
+// Agregar AL FINAL de index.js (antes de app.listen)
+// ===================================
+
+
+
+// Configurar cliente Twilio
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
+
+
+// Test endpoint
+app.get('/test-whatsapp-prod', async (req, res) => {
+  try {
+    console.log('🧪 Probando WhatsApp en producción...');
+    
+    const message = await twilioClient.messages.create({
+      body: '🏗️ SuperCasa - Sistema WhatsApp funcionando en producción!',
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+      to: 'whatsapp:+573001399242'
+    });
+
+    console.log(`✅ WhatsApp enviado: ${message.sid}`);
+    res.json({ success: true, messageSid: message.sid });
+    
+  } catch (error) {
+    console.error('❌ Error WhatsApp:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Debug endpoint
+app.get('/debug-twilio', (req, res) => {
+  res.json({
+    account_sid: process.env.TWILIO_ACCOUNT_SID ? 'CONFIGURADO' : 'FALTANTE',
+    auth_token: process.env.TWILIO_AUTH_TOKEN ? 'CONFIGURADO' : 'FALTANTE',
+    whatsapp_number: process.env.TWILIO_WHATSAPP_NUMBER
+  });
+});
+
+console.log('📱 WhatsApp Business configurado para SuperCasa');
+
+// ✅ Agregar campos WhatsApp a tabla pedidos
+pool.query(`
+  ALTER TABLE pedidos 
+  ADD COLUMN IF NOT EXISTS whatsapp_status VARCHAR(20) DEFAULT 'pending',
+  ADD COLUMN IF NOT EXISTS whatsapp_message_sid VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS whatsapp_sent_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS whatsapp_delivered_at TIMESTAMP
+`).then(() => console.log("✅ Campos WhatsApp agregados a tabla pedidos"))
+  .catch(err => console.log("ℹ️ Campos WhatsApp ya existen:", err.message));
+
+// ✅ Crear tabla logs WhatsApp
+pool.query(`
+  CREATE TABLE IF NOT EXISTS whatsapp_logs (
+    id SERIAL PRIMARY KEY,
+    pedido_id INTEGER REFERENCES pedidos(id),
+    telefono VARCHAR(20),
+    mensaje TEXT,
+    tipo VARCHAR(20), -- 'confirmacion', 'bot_response', 'incoming'
+    status VARCHAR(20), -- 'sent', 'delivered', 'failed'
+    message_sid VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`).then(() => console.log("✅ Tabla 'whatsapp_logs' lista"))
+  .catch(err => console.error("❌ Error creando tabla whatsapp_logs:", err));
+
+// ===================================
+// 🤖 FUNCIÓN ENVIAR CONFIRMACIÓN WHATSAPP
+// ===================================
+async function enviarConfirmacionWhatsApp(pedidoData) {
+  try {
+    const { 
+      id, 
+      total, 
+      telefono_contacto, 
+      torre_entrega, 
+      piso_entrega, 
+      apartamento_entrega, 
+      productos 
+    } = pedidoData;
+
+    const numeroPedido = `SUP-${String(id).padStart(3, '0')}`;
+    const direccion = `Torre ${torre_entrega}, Piso ${piso_entrega}, Apt ${apartamento_entrega}`;
+    
+    // Calcular resumen de productos
+    const productosArray = typeof productos === 'string' ? JSON.parse(productos) : productos;
+    const cantidadItems = productosArray.reduce((sum, item) => sum + (item.cantidad || 1), 0);
+    
+    const mensaje = `🏗️ *SuperCasa - Pedido Confirmado*
+
+📦 *Pedido:* ${numeroPedido}
+💰 *Total:* $${Number(total).toLocaleString('es-CO')}
+📍 *Entrega:* ${direccion}
+🛒 *Items:* ${cantidadItems} productos
+
+⏰ *Tiempo estimado:* Máximo 20 minutos
+
+¡Gracias por confiar en SuperCasa! 🚀
+
+_Escribe SUP-${String(id).padStart(3, '0')} para consultar tu pedido_`;
+
+    console.log(`📱 Enviando WhatsApp confirmación pedido ${numeroPedido} a ${telefono_contacto}`);
+
+    // Normalizar número (quitar espacios, guiones, etc.)
+    const numeroLimpio = telefono_contacto.replace(/\D/g, '');
+    const numeroWhatsApp = `whatsapp:+57${numeroLimpio}`;
+
+    const message = await twilioClient.messages.create({
+      body: mensaje,
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+      to: numeroWhatsApp
+    });
+
+    console.log(`✅ WhatsApp enviado: ${message.sid}`);
+
+    // Actualizar pedido con info WhatsApp
+    await pool.query(
+      'UPDATE pedidos SET whatsapp_status = $1, whatsapp_message_sid = $2, whatsapp_sent_at = CURRENT_TIMESTAMP WHERE id = $3',
+      ['sent', message.sid, id]
+    );
+
+    // Log en tabla WhatsApp
+    await pool.query(
+      'INSERT INTO whatsapp_logs (pedido_id, telefono, mensaje, tipo, status, message_sid) VALUES ($1, $2, $3, $4, $5, $6)',
+      [id, telefono_contacto, mensaje, 'confirmacion', 'sent', message.sid]
+    );
+
+    return { success: true, messageSid: message.sid };
+
+  } catch (error) {
+    console.error('❌ Error enviando WhatsApp:', error);
+    
+    // Log error
+    try {
+      await pool.query(
+        'INSERT INTO whatsapp_logs (pedido_id, telefono, mensaje, tipo, status) VALUES ($1, $2, $3, $4, $5)',
+        [pedidoData.id, pedidoData.telefono_contacto, error.message, 'confirmacion', 'failed']
+      );
+    } catch (logError) {
+      console.error('❌ Error loggeando error WhatsApp:', logError);
+    }
+    
+    return { success: false, error: error.message };
+  }
+}
+
+// ===================================
+// 📞 WEBHOOK WHATSAPP - RECIBIR MENSAJES
+// ===================================
+app.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async (req, res) => {
+  try {
+    const { From, Body, MessageSid, SmsStatus } = req.body;
+    
+    console.log('📥 Webhook WhatsApp recibido:', { From, Body, SmsStatus });
+
+    // Extraer número (quitar whatsapp: y +57)
+    const telefono = From.replace('whatsapp:+57', '').replace('whatsapp:', '').replace('+57', '');
+    const mensaje = Body?.toLowerCase().trim();
+
+    // ✅ PROCESAR DIFERENTES TIPOS DE MENSAJES
+    let respuesta = null;
+
+    if (!mensaje) {
+      return res.status(200).send('OK');
+    }
+
+    // 1. CONSULTA DE PEDIDO
+    if (mensaje.includes('sup-') || mensaje.includes('pedido')) {
+      const match = mensaje.match(/sup-?(\d+)/i);
+      if (match) {
+        const pedidoNumero = match[1];
+        
+        const pedidoResult = await pool.query(`
+          SELECT p.*, u.nombre 
+          FROM pedidos p 
+          JOIN usuarios u ON p.usuario_id = u.id 
+          WHERE p.id = $1 AND (p.telefono_contacto = $2 OR u.telefono = $2)
+        `, [pedidoNumero, telefono]);
+
+        if (pedidoResult.rows.length > 0) {
+          const pedido = pedidoResult.rows[0];
+          const tiempoTranscurrido = Math.round((Date.now() - new Date(pedido.fecha).getTime()) / 60000);
+          
+          respuesta = `📦 *Pedido SUP-${pedidoNumero}*
+
+👤 Cliente: ${pedido.nombre}
+💰 Total: $${Number(pedido.total).toLocaleString('es-CO')}
+📍 ${pedido.torre_entrega ? `Torre ${pedido.torre_entrega}, Piso ${pedido.piso_entrega}, Apt ${pedido.apartamento_entrega}` : 'Dirección por confirmar'}
+📊 Estado: ${pedido.estado.toUpperCase()}
+⏰ Hace ${tiempoTranscurrido} min
+
+${pedido.estado === 'pendiente' && tiempoTranscurrido < 20 ? '🚀 ¡En preparación! Entrega en máximo 20 min' : 
+  pedido.estado === 'entregado' ? '✅ ¡Pedido entregado!' : 
+  '⚠️ Revisando estado...'}`;
+        } else {
+          respuesta = `❌ No encontré el pedido SUP-${pedidoNumero} con este número de teléfono.
+
+¿Es tu primer pedido? Visita:
+👉 https://supercasa2.netlify.app`;
+        }
+      }
+    }
+    // 2. PRODUCTOS / CATÁLOGO
+    else if (mensaje.includes('producto') || mensaje.includes('que tienen') || mensaje.includes('catalogo') || mensaje.includes('menu')) {
+      respuesta = `🛒 *Productos SuperCasa*
+
+🥗 **Mercado:** Frutas, verduras, lácteos
+🧴 **Aseo:** Detergente, jabón, shampoo  
+🥤 **Bebidas:** Gaseosas, jugos, agua
+🍿 **Snacks:** Papas, galletas, dulces
+
+Para ver todos los productos y hacer pedidos:
+👉 https://supercasa2.netlify.app
+
+🚀 ¡Entrega en máximo 20 minutos!
+🚚 ¡Domicilio GRATIS dentro del conjunto!`;
+    }
+    // 3. HORARIOS / INFO GENERAL
+    else if (mensaje.includes('horario') || mensaje.includes('hora') || mensaje.includes('cuando') || mensaje.includes('atencion')) {
+      respuesta = `🕐 *Horarios SuperCasa*
+
+📅 **Lunes a Domingo:** 7:00 AM - 10:00 PM
+⚡ **Entrega:** Máximo 20 minutos
+🏗️ **Cobertura:** Torres 1, 2, 3, 4, 5
+💳 **Pagos:** Nequi, PSE, Tarjetas, Efectivo
+🚚 **Domicilio:** ¡GRATIS!
+
+¿Necesitas algo más? 😊`;
+    }
+    // 4. SALUDO / AYUDA GENERAL
+    else if (mensaje.includes('hola') || mensaje.includes('ayuda') || mensaje.includes('info') || mensaje.includes('help')) {
+      respuesta = `¡Hola! 👋 Soy el asistente de *SuperCasa* 🏗️
+
+Puedo ayudarte con:
+• 📦 Consultar pedidos (envía: SUP-123)
+• 🛒 Ver productos disponibles  
+• 🕐 Horarios y información
+• 📞 Soporte directo
+
+Para hacer pedidos:
+👉 https://supercasa2.netlify.app
+
+¿En qué puedo ayudarte hoy? 😊
+
+🚀 *¡Entrega en máximo 20 minutos!*`;
+    }
+    // 5. RESPUESTA GENÉRICA
+    else {
+      respuesta = `🤖 Soy el asistente de *SuperCasa* 🏗️
+
+No entendí tu mensaje, pero puedo ayudarte con:
+
+📦 *Consultar pedido:* Envía "SUP-123"
+🛒 *Ver productos:* Envía "productos"  
+🕐 *Horarios:* Envía "horarios"
+📞 *Ayuda:* Envía "ayuda"
+
+O haz tu pedido en:
+👉 https://supercasa2.netlify.app
+
+¿En qué más puedo ayudarte? 😊`;
+    }
+
+    // ✅ ENVIAR RESPUESTA SI HAY UNA
+    if (respuesta) {
+      const numeroRespuesta = From; // Usar el mismo formato que viene
+
+      const responseMessage = await twilioClient.messages.create({
+        body: respuesta,
+        from: process.env.TWILIO_WHATSAPP_NUMBER,
+        to: numeroRespuesta
+      });
+
+      console.log(`🤖 Respuesta bot enviada: ${responseMessage.sid}`);
+
+      // Log respuesta
+      await pool.query(
+        'INSERT INTO whatsapp_logs (telefono, mensaje, tipo, status, message_sid) VALUES ($1, $2, $3, $4, $5)',
+        [telefono, respuesta, 'bot_response', 'sent', responseMessage.sid]
+      );
+    }
+
+    // Log mensaje entrante
+    await pool.query(
+      'INSERT INTO whatsapp_logs (telefono, mensaje, tipo, status) VALUES ($1, $2, $3, $4)',
+      [telefono, Body, 'incoming', 'received']
+    );
+
+    res.status(200).send('OK');
+
+  } catch (error) {
+    console.error('❌ Error en webhook WhatsApp:', error);
+    res.status(500).send('Error procesando mensaje');
+  }
+});
+
+// ===================================
+// 🔔 WEBHOOK STATUS (ENTREGA DE MENSAJES)
+// ===================================
+app.post('/webhook/whatsapp/status', express.urlencoded({ extended: false }), async (req, res) => {
+  try {
+    const { MessageSid, MessageStatus } = req.body;
+    
+    console.log(`📊 Status update: ${MessageSid} = ${MessageStatus}`);
+
+    if (MessageStatus === 'delivered') {
+      // Actualizar pedido como delivered
+      await pool.query(
+        'UPDATE pedidos SET whatsapp_status = $1, whatsapp_delivered_at = CURRENT_TIMESTAMP WHERE whatsapp_message_sid = $2',
+        ['delivered', MessageSid]
+      );
+
+      console.log(`✅ Mensaje ${MessageSid} marcado como entregado`);
+    }
+
+    res.status(200).send('OK');
+
+  } catch (error) {
+    console.error('❌ Error en webhook status:', error);
+    res.status(500).send('Error');
+  }
+});
+
+// ===== DEBUG CREDENCIALES =====
+app.get('/debug-twilio', (req, res) => {
+  res.json({
+    account_sid: process.env.TWILIO_ACCOUNT_SID ? 'CONFIGURADO' : 'FALTANTE',
+    auth_token: process.env.TWILIO_AUTH_TOKEN ? 'CONFIGURADO' : 'FALTANTE', 
+    whatsapp_number: process.env.TWILIO_WHATSAPP_NUMBER,
+    account_sid_preview: process.env.TWILIO_ACCOUNT_SID?.substring(0, 10) + '...',
+    auth_token_preview: process.env.TWILIO_AUTH_TOKEN?.substring(0, 10) + '...'
+  });
+});
+
+// ===== TEST WHATSAPP MANUAL =====
+app.get('/test-whatsapp', async (req, res) => {
+  try {
+    console.log('🧪 Probando WhatsApp...');
+    
+    const message = await twilioClient.messages.create({
+      body: '🧪 TEST SuperCasa - Si recibes esto, WhatsApp funciona!',
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+      to: 'whatsapp:+573001399242'
+    });
+
+    console.log(`✅ Mensaje test enviado: ${message.sid}`);
+    res.json({ success: true, messageSid: message.sid });
+    
+  } catch (error) {
+    console.error('❌ Error test WhatsApp:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+console.log('📱 WhatsApp Business configurado para SuperCasa');
+console.log('🔗 Webhook: /webhook/whatsapp');
+console.log('📞 Número: 3001399242');
+console.log('🤖 Bot inteligente activado');
 
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
