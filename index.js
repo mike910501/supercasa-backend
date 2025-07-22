@@ -738,37 +738,37 @@ app.post('/orders', authenticateToken, async (req, res) => {
       console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${cantidadSolicitada}`);
     }
 
-    // ✅ NUEVO: ENVIAR CONFIRMACIÓN WHATSAPP
-const pedidoCompleto = {
-  id: pedidoId,
-  total: totalFinal,
-  telefono_contacto,
-  torre_entrega,
-  piso_entrega,
-  apartamento_entrega,
-  productos: productosConCodigo
-};
+    // ✅ ENVIAR CONFIRMACIÓN WHATSAPP
+    const pedidoCompleto = {
+      id: pedidoId,
+      total: totalFinal,
+      telefono_contacto,
+      torre_entrega,
+      piso_entrega,
+      apartamento_entrega,
+      productos: productosConCodigo
+    };
 
-// Enviar WhatsApp confirmación (sin esperar)
-enviarConfirmacionWhatsApp(pedidoCompleto).then(result => {
-  if (result.success) {
-    console.log(`📱 Confirmación WhatsApp enviada para pedido ${pedidoId}`);
-  } else {
-    console.error(`📱 Error WhatsApp pedido ${pedidoId}:`, result.error);
-  }
-});
+    // Enviar WhatsApp confirmación (sin esperar)
+    enviarConfirmacionWhatsApp(pedidoCompleto).then(result => {
+      if (result.success) {
+        console.log(`📱 Confirmación WhatsApp enviada para pedido ${pedidoId}`);
+      } else {
+        console.error(`📱 Error WhatsApp pedido ${pedidoId}:`, result.error);
+      }
+    });
 
-res.json({ 
-  success: true, 
-  message: 'Pedido creado exitosamente - Confirmación enviada por WhatsApp',
-  pedidoId: pedidoId,
-  totalFinal: totalFinal,
-  descuentoAplicado: codigo_promocional ? true : false,
-  entrega: `Torre ${torre_entrega}, Piso ${piso_entrega}, Apt ${apartamento_entrega}`,
-  tiempoEstimado: '20 minutos máximo',
-  whatsapp: 'Confirmación enviada' // ✅ NUEVO
-  
-});
+    res.json({ 
+      success: true, 
+      message: 'Pedido creado exitosamente - Confirmación enviada por WhatsApp', // ✅ CAMBIADO
+      pedidoId: pedidoId,
+      totalFinal: totalFinal,
+      descuentoAplicado: codigo_promocional ? true : false,
+      entrega: `Torre ${torre_entrega}, Piso ${piso_entrega}, Apt ${apartamento_entrega}`,
+      tiempoEstimado: '20 minutos máximo',
+      whatsapp: 'Confirmación enviada' // ✅ AGREGADO
+    });
+
   } catch (err) {
     console.error('❌ Error guardando pedido:', err);
     res.status(500).json({ error: 'Error guardando pedido' });
@@ -3213,11 +3213,6 @@ app.delete('/api/admin/codigos-promocionales/eliminar', authenticateToken, requi
 
 
 
-// Configurar cliente Twilio
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-
-
-
 // Test endpoint
 app.get('/test-whatsapp-prod', async (req, res) => {
   try {
@@ -3246,8 +3241,13 @@ app.get('/debug-twilio', (req, res) => {
     whatsapp_number: process.env.TWILIO_WHATSAPP_NUMBER
   });
 });
+// ===================================
+// 📱 TWILIO WHATSAPP PARA SUPERCASA
+// CÓDIGO CORREGIDO Y OPTIMIZADO
+// ===================================
 
-console.log('📱 WhatsApp Business configurado para SuperCasa');
+// Configurar cliente Twilio
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 // ✅ Agregar campos WhatsApp a tabla pedidos
 pool.query(`
@@ -3307,7 +3307,7 @@ async function enviarConfirmacionWhatsApp(pedidoData) {
 
 ¡Gracias por confiar en SuperCasa! 🚀
 
-_Escribe SUP-${String(id).padStart(3, '0')} para consultar tu pedido_`;
+_Escribe ${numeroPedido} para consultar tu pedido_`;
 
     console.log(`📱 Enviando WhatsApp confirmación pedido ${numeroPedido} a ${telefono_contacto}`);
 
@@ -3367,7 +3367,6 @@ app.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async (re
     const telefono = From.replace('whatsapp:+57', '').replace('whatsapp:', '').replace('+57', '');
     const mensaje = Body?.toLowerCase().trim();
 
-    // ✅ PROCESAR DIFERENTES TIPOS DE MENSAJES
     let respuesta = null;
 
     if (!mensaje) {
@@ -3473,12 +3472,10 @@ O haz tu pedido en:
 
     // ✅ ENVIAR RESPUESTA SI HAY UNA
     if (respuesta) {
-      const numeroRespuesta = From; // Usar el mismo formato que viene
-
       const responseMessage = await twilioClient.messages.create({
         body: respuesta,
         from: process.env.TWILIO_WHATSAPP_NUMBER,
-        to: numeroRespuesta
+        to: From
       });
 
       console.log(`🤖 Respuesta bot enviada: ${responseMessage.sid}`);
@@ -3531,7 +3528,9 @@ app.post('/webhook/whatsapp/status', express.urlencoded({ extended: false }), as
   }
 });
 
-// ===== DEBUG CREDENCIALES =====
+// ===================================
+// 🧪 ENDPOINTS DE TEST Y DEBUG
+// ===================================
 app.get('/debug-twilio', (req, res) => {
   res.json({
     account_sid: process.env.TWILIO_ACCOUNT_SID ? 'CONFIGURADO' : 'FALTANTE',
@@ -3542,7 +3541,25 @@ app.get('/debug-twilio', (req, res) => {
   });
 });
 
-// ===== TEST WHATSAPP MANUAL =====
+app.get('/test-whatsapp-prod', async (req, res) => {
+  try {
+    console.log('🧪 Probando WhatsApp en producción...');
+    
+    const message = await twilioClient.messages.create({
+      body: '🏗️ SuperCasa - Sistema WhatsApp funcionando en producción!',
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+      to: 'whatsapp:+573001399242'
+    });
+
+    console.log(`✅ WhatsApp enviado: ${message.sid}`);
+    res.json({ success: true, messageSid: message.sid });
+    
+  } catch (error) {
+    console.error('❌ Error WhatsApp:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/test-whatsapp', async (req, res) => {
   try {
     console.log('🧪 Probando WhatsApp...');
@@ -3566,6 +3583,7 @@ console.log('📱 WhatsApp Business configurado para SuperCasa');
 console.log('🔗 Webhook: /webhook/whatsapp');
 console.log('📞 Número: 3001399242');
 console.log('🤖 Bot inteligente activado');
+
 
 // 🚀 Iniciar servidor
 app.listen(3000, () => {
