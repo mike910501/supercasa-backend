@@ -3275,7 +3275,7 @@ pool.query(`
   .catch(err => console.error("❌ Error creando tabla whatsapp_logs:", err));
 
 // ===================================
-// 🤖 FUNCIÓN ENVIAR CONFIRMACIÓN WHATSAPP
+// 🤖 FUNCIÓN ENVIAR CONFIRMACIÓN WHATSAPP CORREGIDA
 // ===================================
 async function enviarConfirmacionWhatsApp(pedidoData) {
   try {
@@ -3292,28 +3292,55 @@ async function enviarConfirmacionWhatsApp(pedidoData) {
     const numeroPedido = `SUP-${String(id).padStart(3, '0')}`;
     const direccion = `Torre ${torre_entrega}, Piso ${piso_entrega}, Apt ${apartamento_entrega}`;
     
-    // Calcular resumen de productos
+    // Calcular productos
     const productosArray = typeof productos === 'string' ? JSON.parse(productos) : productos;
     const cantidadItems = productosArray.reduce((sum, item) => sum + (item.cantidad || 1), 0);
     
-    const mensaje = `🏗️ *SuperCasa - Pedido Confirmado*
+    console.log(`📱 Enviando confirmación TEMPLATE ${numeroPedido} a ${telefono_contacto}`);
 
-📦 *Pedido:* ${numeroPedido}
-💰 *Total:* $${Number(total).toLocaleString('es-CO')}
-📍 *Entrega:* ${direccion}
-🛒 *Items:* ${cantidadItems} productos
-
-⏰ *Tiempo estimado:* Máximo 20 minutos
-
-¡Gracias por confiar en SuperCasa! 🚀
-
-_Escribe ${numeroPedido} para consultar tu pedido_`;
-
-    console.log(`📱 Enviando WhatsApp confirmación pedido ${numeroPedido} a ${telefono_contacto}`);
-
-    // Normalizar número (quitar espacios, guiones, etc.)
+    // Normalizar número
     const numeroLimpio = telefono_contacto.replace(/\D/g, '');
     const numeroWhatsApp = `whatsapp:+57${numeroLimpio}`;
+
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    
+    // INTENTAR PRIMERO CON TEMPLATE (cuando esté aprobado)
+    if (process.env.WHATSAPP_TEMPLATE_SID) {
+      try {
+        const message = await twilioClient.messages.create({
+          contentSid: process.env.WHATSAPP_TEMPLATE_SID,
+          from: process.env.TWILIO_WHATSAPP_NUMBER,
+          to: numeroWhatsApp,
+          contentVariables: JSON.stringify({
+            1: numeroPedido,
+            2: Number(total).toLocaleString('es-CO'),
+            3: direccion,
+            4: cantidadItems.toString()
+          })
+        });
+
+        console.log(`✅ Confirmación TEMPLATE enviada: ${message.sid}`);
+        await actualizarPedidoWhatsApp(id, message.sid, 'Template confirmación');
+        return { success: true, messageSid: message.sid };
+
+      } catch (templateError) {
+        console.log('⚠️ Template falló, usando mensaje libre:', templateError.message);
+      }
+    }
+
+    // BACKUP: Mensaje libre (solo funciona si hay sesión activa)
+    const mensaje = `🎉 *¡Pedido Confirmado!*
+
+📦 **Número:** ${numeroPedido}
+💰 **Total:** $${Number(total).toLocaleString('es-CO')}
+📍 **Entrega:** ${direccion}
+🛒 **Items:** ${cantidadItems} productos
+
+⚡ **Tiempo estimado:** Máximo 20 minutos
+
+¡Gracias por elegir SuperCasa! 🏠
+
+💬 _Escribe ${numeroPedido} para consultar estado_`;
 
     const message = await twilioClient.messages.create({
       body: mensaje,
@@ -3321,185 +3348,291 @@ _Escribe ${numeroPedido} para consultar tu pedido_`;
       to: numeroWhatsApp
     });
 
-    console.log(`✅ WhatsApp enviado: ${message.sid}`);
-
-    // Actualizar pedido con info WhatsApp
-    await pool.query(
-      'UPDATE pedidos SET whatsapp_status = $1, whatsapp_message_sid = $2, whatsapp_sent_at = CURRENT_TIMESTAMP WHERE id = $3',
-      ['sent', message.sid, id]
-    );
-
-    // Log en tabla WhatsApp
-    await pool.query(
-      'INSERT INTO whatsapp_logs (pedido_id, telefono, mensaje, tipo, status, message_sid) VALUES ($1, $2, $3, $4, $5, $6)',
-      [id, telefono_contacto, mensaje, 'confirmacion', 'sent', message.sid]
-    );
-
+    console.log(`✅ Confirmación LIBRE enviada: ${message.sid}`);
+    await actualizarPedidoWhatsApp(id, message.sid, 'Confirmación libre');
     return { success: true, messageSid: message.sid };
 
   } catch (error) {
-    console.error('❌ Error enviando WhatsApp:', error);
-    
-    // Log error
-    try {
-      await pool.query(
-        'INSERT INTO whatsapp_logs (pedido_id, telefono, mensaje, tipo, status) VALUES ($1, $2, $3, $4, $5)',
-        [pedidoData.id, pedidoData.telefono_contacto, error.message, 'confirmacion', 'failed']
-      );
-    } catch (logError) {
-      console.error('❌ Error loggeando error WhatsApp:', logError);
-    }
-    
+    console.error('❌ Error enviando confirmación WhatsApp:', error);
+    await logErrorWhatsApp(pedidoData.id, pedidoData.telefono_contacto, error.message);
     return { success: false, error: error.message };
   }
 }
 
 // ===================================
+// 🔧 FUNCIONES AUXILIARES WHATSAPP
+// ===================================
+async function actualizarPedidoWhatsApp(pedidoId, messageSid, tipo) {
+  try {
+    await pool.query(
+      'UPDATE pedidos SET whatsapp_status = $1, whatsapp_message_sid = $2, whatsapp_sent_at = CURRENT_TIMESTAMP WHERE id = $3',
+      ['sent', messageSid, pedidoId]
+    );
+
+    await pool.query(
+      'INSERT INTO whatsapp_logs (pedido_id, telefono, mensaje, tipo, status, message_sid) VALUES ($1, $2, $3, $4, $5, $6)',
+      [pedidoId, 'confirmacion', tipo, 'confirmacion', 'sent', messageSid]
+    );
+  } catch (error) {
+    console.error('❌ Error actualizando pedido WhatsApp:', error);
+  }
+}
+
+async function logErrorWhatsApp(pedidoId, telefono, errorMessage) {
+  try {
+    await pool.query(
+      'INSERT INTO whatsapp_logs (pedido_id, telefono, mensaje, tipo, status) VALUES ($1, $2, $3, $4, $5)',
+      [pedidoId, telefono, errorMessage, 'confirmacion', 'failed']
+    );
+  } catch (error) {
+    console.error('❌ Error loggeando error WhatsApp:', error);
+  }
+}
+// ===================================
 // 📞 WEBHOOK WHATSAPP - RECIBIR MENSAJES
 // ===================================
 app.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async (req, res) => {
+  console.log('📥 Webhook WhatsApp PRODUCCIÓN recibido:', req.body);
+  
   try {
+    // ✅ RESPUESTA INMEDIATA CRÍTICA (ARREGLA ERROR 12200)
+    res.status(200).type('text/plain').send('OK');
+    
     const { From, Body, MessageSid, SmsStatus } = req.body;
     
-    console.log('📥 Webhook WhatsApp recibido:', { From, Body, SmsStatus });
-
-    // Extraer número (quitar whatsapp: y +57)
+    if (!From || !Body) {
+      console.log('⚠️ Webhook sin From o Body, ignorando');
+      return;
+    }
+    
+    // Extraer número limpio
     const telefono = From.replace('whatsapp:+57', '').replace('whatsapp:', '').replace('+57', '');
-    const mensaje = Body?.toLowerCase().trim();
+    const mensaje = Body.toLowerCase().trim();
+    
+    console.log(`📱 Mensaje PRODUCCIÓN de ${telefono}: "${Body}"`);
+    
+    // Procesar mensaje asíncronamente (evita timeouts)
+    procesarMensajeWhatsAppProduccion(telefono, Body, From);
+    
+  } catch (error) {
+    console.error('❌ Error en webhook PRODUCCIÓN:', error);
+    // NO cambiar response - ya enviamos 200 OK
+  }
+});
 
+// ===================================
+// 🤖 PROCESADOR DE MENSAJES CORREGIDO
+// ===================================
+async function procesarMensajeWhatsAppProduccion(telefono, mensajeOriginal, fromWhatsApp) {
+  try {
+    const mensaje = mensajeOriginal.toLowerCase().trim();
     let respuesta = null;
 
-    if (!mensaje) {
-      return res.status(200).send('OK');
-    }
-
-    // 1. CONSULTA DE PEDIDO
-    if (mensaje.includes('sup-') || mensaje.includes('pedido')) {
-      const match = mensaje.match(/sup-?(\d+)/i);
+    // 1. CONSULTA DE PEDIDO ESPECÍFICO
+    if (mensaje.includes('sup-') || /pedido\s*\d+/.test(mensaje)) {
+      const match = mensaje.match(/sup-?(\d+)/i) || mensaje.match(/pedido\s*(\d+)/i);
       if (match) {
         const pedidoNumero = match[1];
-        
-        const pedidoResult = await pool.query(`
-          SELECT p.*, u.nombre 
-          FROM pedidos p 
-          JOIN usuarios u ON p.usuario_id = u.id 
-          WHERE p.id = $1 AND (p.telefono_contacto = $2 OR u.telefono = $2)
-        `, [pedidoNumero, telefono]);
-
-        if (pedidoResult.rows.length > 0) {
-          const pedido = pedidoResult.rows[0];
-          const tiempoTranscurrido = Math.round((Date.now() - new Date(pedido.fecha).getTime()) / 60000);
-          
-          respuesta = `📦 *Pedido SUP-${pedidoNumero}*
-
-👤 Cliente: ${pedido.nombre}
-💰 Total: $${Number(pedido.total).toLocaleString('es-CO')}
-📍 ${pedido.torre_entrega ? `Torre ${pedido.torre_entrega}, Piso ${pedido.piso_entrega}, Apt ${pedido.apartamento_entrega}` : 'Dirección por confirmar'}
-📊 Estado: ${pedido.estado.toUpperCase()}
-⏰ Hace ${tiempoTranscurrido} min
-
-${pedido.estado === 'pendiente' && tiempoTranscurrido < 20 ? '🚀 ¡En preparación! Entrega en máximo 20 min' : 
-  pedido.estado === 'entregado' ? '✅ ¡Pedido entregado!' : 
-  '⚠️ Revisando estado...'}`;
-        } else {
-          respuesta = `❌ No encontré el pedido SUP-${pedidoNumero} con este número de teléfono.
-
-¿Es tu primer pedido? Visita:
-👉 https://supercasa2.netlify.app`;
-        }
+        respuesta = await consultarPedidoWhatsApp(pedidoNumero, telefono);
       }
     }
-    // 2. PRODUCTOS / CATÁLOGO
-    else if (mensaje.includes('producto') || mensaje.includes('que tienen') || mensaje.includes('catalogo') || mensaje.includes('menu')) {
+    // 2. PRODUCTOS/CATÁLOGO
+    else if (mensaje.includes('producto') || mensaje.includes('que tienen') || 
+             mensaje.includes('catalogo') || mensaje.includes('menu') ||
+             mensaje.includes('que venden')) {
       respuesta = `🛒 *Productos SuperCasa*
 
-🥗 **Mercado:** Frutas, verduras, lácteos
-🧴 **Aseo:** Detergente, jabón, shampoo  
-🥤 **Bebidas:** Gaseosas, jugos, agua
-🍿 **Snacks:** Papas, galletas, dulces
+🥗 **Mercado:** Frutas, verduras, lácteos, carnes
+🧴 **Aseo:** Detergente, jabón, shampoo, papel
+🥤 **Bebidas:** Gaseosas, jugos, agua, cerveza
+🍿 **Snacks:** Papas, galletas, dulces, helados
 
-Para ver todos los productos y hacer pedidos:
-👉 https://supercasa2.netlify.app
+🛍️ **Ver todo y hacer pedidos:**
+👉 https://tiendasupercasa.com
 
 🚀 ¡Entrega en máximo 20 minutos!
 🚚 ¡Domicilio GRATIS dentro del conjunto!`;
     }
-    // 3. HORARIOS / INFO GENERAL
-    else if (mensaje.includes('horario') || mensaje.includes('hora') || mensaje.includes('cuando') || mensaje.includes('atencion')) {
+    // 3. HORARIOS/INFO
+    else if (mensaje.includes('horario') || mensaje.includes('hora') || 
+             mensaje.includes('cuando') || mensaje.includes('atencion') ||
+             mensaje.includes('abrir')) {
       respuesta = `🕐 *Horarios SuperCasa*
 
-📅 **Lunes a Domingo:** 7:00 AM - 10:00 PM
+📅 **Lunes a Domingo:** 6:00 AM - 11:00 PM
 ⚡ **Entrega:** Máximo 20 minutos
-🏗️ **Cobertura:** Torres 1, 2, 3, 4, 5
+🏗️ **Cobertura:** Torres 1, 2, 3, 4, 5 (Bellavista)
 💳 **Pagos:** Nequi, PSE, Tarjetas, Efectivo
 🚚 **Domicilio:** ¡GRATIS!
+📞 **WhatsApp:** 300 139 9242
 
-¿Necesitas algo más? 😊`;
+¿Algo más en lo que pueda ayudarte? 😊`;
     }
-    // 4. SALUDO / AYUDA GENERAL
-    else if (mensaje.includes('hola') || mensaje.includes('ayuda') || mensaje.includes('info') || mensaje.includes('help')) {
-      respuesta = `¡Hola! 👋 Soy el asistente de *SuperCasa* 🏗️
+    // 4. SALUDO/AYUDA
+    else if (mensaje.includes('hola') || mensaje.includes('ayuda') || 
+             mensaje.includes('info') || mensaje.includes('help') ||
+             mensaje.includes('buenos') || mensaje.includes('buenas')) {
+      respuesta = `¡Hola! 👋 Soy el asistente de *SuperCasa* 🏠
+
+🛒 **Tu supermercado en casa en 20 minutos**
 
 Puedo ayudarte con:
-• 📦 Consultar pedidos (envía: SUP-123)
-• 🛒 Ver productos disponibles  
-• 🕐 Horarios y información
-• 📞 Soporte directo
+- 📦 Consultar pedidos (envía: SUP-123)
+- 🛍️ Ver productos disponibles
+- 🕐 Horarios y información
+- 📞 Soporte directo
 
-Para hacer pedidos:
-👉 https://supercasa2.netlify.app
+🛍️ **Hacer pedidos:**
+👉 https://tiendasupercasa.com
 
-¿En qué puedo ayudarte hoy? 😊
-
-🚀 *¡Entrega en máximo 20 minutos!*`;
+¿En qué puedo ayudarte hoy? 😊`;
     }
     // 5. RESPUESTA GENÉRICA
     else {
-      respuesta = `🤖 Soy el asistente de *SuperCasa* 🏗️
+      respuesta = `🤖 ¡Hola! Soy el asistente de *SuperCasa* 🏠
 
-No entendí tu mensaje, pero puedo ayudarte con:
+No entendí exactamente tu consulta, pero puedo ayudarte con:
 
-📦 *Consultar pedido:* Envía "SUP-123"
-🛒 *Ver productos:* Envía "productos"  
-🕐 *Horarios:* Envía "horarios"
-📞 *Ayuda:* Envía "ayuda"
+📦 **Consultar pedido:** Envía "SUP-123"
+🛒 **Ver productos:** Envía "productos"
+🕐 **Horarios:** Envía "horarios"  
+💳 **Pagos:** Envía "pagos"
 
-O haz tu pedido en:
-👉 https://supercasa2.netlify.app
+🛍️ **O haz tu pedido directamente:**
+👉 https://tiendasupercasa.com
 
-¿En qué más puedo ayudarte? 😊`;
+¿Puedes ser más específico? 😊`;
     }
 
     // ✅ ENVIAR RESPUESTA SI HAY UNA
     if (respuesta) {
-      const responseMessage = await twilioClient.messages.create({
-        body: respuesta,
-        from: process.env.TWILIO_WHATSAPP_NUMBER,
-        to: From
-      });
-
-      console.log(`🤖 Respuesta bot enviada: ${responseMessage.sid}`);
-
-      // Log respuesta
+      await enviarRespuestaWhatsAppProduccion(fromWhatsApp, respuesta);
+      
+      // Log respuesta enviada
       await pool.query(
-        'INSERT INTO whatsapp_logs (telefono, mensaje, tipo, status, message_sid) VALUES ($1, $2, $3, $4, $5)',
-        [telefono, respuesta, 'bot_response', 'sent', responseMessage.sid]
+        'INSERT INTO whatsapp_logs (telefono, mensaje, tipo, status) VALUES ($1, $2, $3, $4)',
+        [telefono, respuesta, 'bot_response', 'sent']
       );
     }
 
-    // Log mensaje entrante
+    // Log mensaje entrante SIEMPRE
     await pool.query(
       'INSERT INTO whatsapp_logs (telefono, mensaje, tipo, status) VALUES ($1, $2, $3, $4)',
-      [telefono, Body, 'incoming', 'received']
+      [telefono, mensajeOriginal, 'incoming', 'received']
     );
 
-    res.status(200).send('OK');
+  } catch (error) {
+    console.error('❌ Error procesando mensaje WhatsApp:', error);
+  }
+}
+
+// ===================================
+// 🔍 FUNCIÓN CONSULTAR PEDIDO CORREGIDA
+// ===================================
+async function consultarPedidoWhatsApp(pedidoNumero, telefono) {
+  try {
+    const pedidoResult = await pool.query(`
+      SELECT p.*, u.nombre 
+      FROM pedidos p 
+      JOIN usuarios u ON p.usuario_id = u.id 
+      WHERE p.id = $1 AND (p.telefono_contacto = $2 OR u.telefono = $2)
+    `, [pedidoNumero, telefono]);
+
+    if (pedidoResult.rows.length === 0) {
+      return `❌ No encontré el pedido SUP-${pedidoNumero} asociado a este número.
+
+🔍 **Verifica:**
+- ¿Es el número correcto del pedido?
+- ¿Usaste el mismo teléfono al pedir?
+
+🛍️ **¿Primer pedido?**
+👉 https://tiendasupercasa.com
+
+¿Necesitas ayuda? Envía "ayuda" 😊`;
+    }
+
+    const pedido = pedidoResult.rows[0];
+    const tiempoTranscurrido = Math.round((Date.now() - new Date(pedido.fecha).getTime()) / 60000);
+    const direccion = pedido.torre_entrega ? 
+      `Torre ${pedido.torre_entrega}, Piso ${pedido.piso_entrega}, Apt ${pedido.apartamento_entrega}` : 
+      'Dirección por confirmar';
+
+    let estadoEmoji = '';
+    let estadoMensaje = '';
+
+    switch (pedido.estado.toLowerCase()) {
+      case 'pendiente':
+        estadoEmoji = tiempoTranscurrido < 20 ? '🚀' : '⚠️';
+        estadoMensaje = tiempoTranscurrido < 20 ? 
+          '¡En preparación! Entrega en máximo 20 min' : 
+          'Revisando tiempo de entrega...';
+        break;
+      case 'procesando':
+        estadoEmoji = '👨‍🍳';
+        estadoMensaje = '¡Preparando tu pedido!';
+        break;
+      case 'enviado':
+        estadoEmoji = '🚚';
+        estadoMensaje = '¡En camino a tu torre!';
+        break;
+      case 'entregado':
+        estadoEmoji = '✅';
+        estadoMensaje = '¡Pedido entregado exitosamente!';
+        break;
+      case 'cancelado':
+        estadoEmoji = '❌';
+        estadoMensaje = 'Pedido cancelado';
+        break;
+      default:
+        estadoEmoji = '📦';
+        estadoMensaje = 'Estado en revisión';
+    }
+
+    return `📦 *Pedido SUP-${pedidoNumero}*
+
+👤 **Cliente:** ${pedido.nombre}
+💰 **Total:** $${Number(pedido.total).toLocaleString('es-CO')}
+📍 **Entrega:** ${direccion}
+📊 **Estado:** ${estadoEmoji} ${pedido.estado.toUpperCase()}
+⏰ **Tiempo:** Hace ${tiempoTranscurrido} min
+
+${estadoEmoji} ${estadoMensaje}
+
+${pedido.estado === 'entregado' ? 
+  '¡Gracias por elegirnos! 😊' : 
+  '¿Alguna pregunta? ¡Estoy aquí! 💬'}`;
 
   } catch (error) {
-    console.error('❌ Error en webhook WhatsApp:', error);
-    res.status(500).send('Error procesando mensaje');
+    console.error('❌ Error consultando pedido:', error);
+    return `❌ Error consultando el pedido SUP-${pedidoNumero}.
+
+Por favor intenta de nuevo o contacta soporte.
+📞 WhatsApp: 300 139 9242`;
   }
-});
+}
+
+// ===================================
+// 📤 FUNCIÓN ENVIAR RESPUESTA CORREGIDA
+// ===================================
+async function enviarRespuestaWhatsAppProduccion(toWhatsApp, mensaje) {
+  try {
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    
+    // Las respuestas del bot SIEMPRE son en sesión activa (el usuario escribió primero)
+    const message = await twilioClient.messages.create({
+      body: mensaje,
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+      to: toWhatsApp
+    });
+
+    console.log(`✅ Respuesta bot enviada: ${message.sid}`);
+    return message.sid;
+
+  } catch (error) {
+    console.error('❌ Error enviando respuesta bot:', error);
+    throw error;
+  }
+}
 
 // ===================================
 // 🔔 WEBHOOK STATUS (ENTREGA DE MENSAJES)
@@ -3578,6 +3711,70 @@ app.get('/test-whatsapp', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ===================================
+// 🧪 ENDPOINTS DE TEST WHATSAPP
+// ===================================
+
+// Test confirmación con template
+app.get('/test-whatsapp-template', async (req, res) => {
+  try {
+    console.log('🧪 Probando template confirmación...');
+    
+    const testPedido = {
+      id: 999,
+      total: 25500,
+      telefono_contacto: '3001399242',  // Cambia por tu número
+      torre_entrega: '1',
+      piso_entrega: 5,
+      apartamento_entrega: '501',
+      productos: [
+        { nombre: 'Producto Test', cantidad: 2 },
+        { nombre: 'Otro Test', cantidad: 1 }
+      ]
+    };
+    
+    const result = await enviarConfirmacionWhatsApp(testPedido);
+    
+    res.json({ 
+      success: result.success, 
+      messageSid: result.messageSid,
+      error: result.error
+    });
+    
+  } catch (error) {
+    console.error('❌ Error test template:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Test mensaje libre
+app.get('/test-whatsapp-libre', async (req, res) => {
+  try {
+    console.log('🧪 Probando mensaje libre...');
+    
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    
+    const message = await twilioClient.messages.create({
+      body: '🧪 TEST SuperCasa - Mensaje libre (solo funciona si hay sesión activa)',
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+      to: 'whatsapp:+573001399242'  // Cambia por tu número
+    });
+
+    console.log(`✅ Mensaje libre enviado: ${message.sid}`);
+    res.json({ success: true, messageSid: message.sid });
+    
+  } catch (error) {
+    console.error('❌ Error mensaje libre:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+console.log('✅ WhatsApp PRODUCCIÓN con Templates configurado');
+console.log('🔗 Webhook: https://supercasa-backend-vvu1.onrender.com/webhook/whatsapp');
+console.log('📝 Templates requeridos para confirmaciones automáticas');
+console.log('🤖 Bot responde en sesiones activas');
+
 
 console.log('📱 WhatsApp Business configurado para SuperCasa');
 console.log('🔗 Webhook: /webhook/whatsapp');
