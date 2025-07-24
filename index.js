@@ -3396,7 +3396,7 @@ app.post('/webhook/whatsapp', express.urlencoded({ extended: false }), async (re
   
   try {
     // ✅ RESPUESTA INMEDIATA CRÍTICA (ARREGLA ERROR 12200)
-    res.status(200).type('text/plain').send('OK');
+    res.status(200).send('');
     
     const { From, Body, MessageSid, SmsStatus } = req.body;
     
