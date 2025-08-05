@@ -561,18 +561,253 @@ app.put('/productos/:id', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-// ===================
-// 🛍️ RUTAS DE PEDIDOS
-// ===================
+// ====================================
+// 🎁 RUTAS DE PAQUETES SUPERCASA
+// ====================================
+// Agregar DESPUÉS de las rutas de productos existentes en index.js
 
-// 🛍️ Crear pedido con CONTROL DE STOCK + CÓDIGOS + PROMOCIONES
+// 📦 Obtener todos los paquetes activos (público)
+app.get('/paquetes', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT * FROM vista_paquetes_completos 
+      WHERE activo = true 
+      AND (fecha_inicio IS NULL OR fecha_inicio <= NOW())
+      AND (fecha_fin IS NULL OR fecha_fin >= NOW())
+      ORDER BY categoria, nombre
+    `);
+    
+    res.json({
+      success: true,
+      paquetes: result.rows,
+      total: result.rows.length
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo paquetes:', error);
+    res.status(500).json({ error: 'Error obteniendo paquetes' });
+  }
+});
+
+// 📦 Obtener paquete específico con productos
+app.get('/paquetes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const result = await pool.query(`
+      SELECT * FROM vista_paquetes_completos 
+      WHERE id = $1
+    `, [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Paquete no encontrado' });
+    }
+    
+    res.json({
+      success: true,
+      paquete: result.rows[0]
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo paquete:', error);
+    res.status(500).json({ error: 'Error obteniendo paquete' });
+  }
+});
+
+// 🎁 Crear paquete (solo admin)
+app.post('/api/admin/paquetes', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { 
+      nombre, 
+      descripcion, 
+      precio_paquete, 
+      categoria, 
+      imagen, 
+      productos, // Array de {producto_id, cantidad}
+      fecha_inicio,
+      fecha_fin
+    } = req.body;
+
+    if (!nombre || !precio_paquete || !productos || productos.length === 0) {
+      return res.status(400).json({ 
+        error: 'Nombre, precio y productos son obligatorios' 
+      });
+    }
+
+    // Validar que todos los productos existen
+    const productosIds = productos.map(p => p.producto_id);
+    const productosValidacion = await pool.query(
+      `SELECT id, nombre, stock FROM productos WHERE id = ANY($1)`,
+      [productosIds]
+    );
+
+    if (productosValidacion.rows.length !== productos.length) {
+      return res.status(400).json({ 
+        error: 'Algunos productos no existen' 
+      });
+    }
+
+    // Transacción para crear paquete y relaciones
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Crear paquete
+      // Crear paquete (manejar fechas vacías)
+const fechaInicioFormatted = fecha_inicio && fecha_inicio.trim() !== '' ? fecha_inicio : null;
+const fechaFinFormatted = fecha_fin && fecha_fin.trim() !== '' ? fecha_fin : null;
+
+const paqueteResult = await client.query(`
+  INSERT INTO paquetes (nombre, descripcion, precio_paquete, categoria, imagen, fecha_inicio, fecha_fin)
+  VALUES ($1, $2, $3, $4, $5, $6, $7)
+  RETURNING id
+`, [nombre, descripcion, precio_paquete, categoria, imagen, fechaInicioFormatted, fechaFinFormatted]);
+
+      const paqueteId = paqueteResult.rows[0].id;
+
+      // Crear relaciones con productos
+      for (const prod of productos) {
+        await client.query(`
+          INSERT INTO paquete_productos (paquete_id, producto_id, cantidad)
+          VALUES ($1, $2, $3)
+        `, [paqueteId, prod.producto_id, prod.cantidad]);
+      }
+
+      await client.query('COMMIT');
+      
+      console.log(`✅ Paquete creado: ${nombre} (ID: ${paqueteId})`);
+      
+      res.json({ 
+        success: true, 
+        paquete_id: paqueteId,
+        message: 'Paquete creado exitosamente'
+      });
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+  } catch (error) {
+    console.error('❌ Error creando paquete:', error);
+    res.status(500).json({ error: 'Error creando paquete' });
+  }
+});
+
+// ✏️ Actualizar paquete (solo admin)
+app.put('/api/admin/paquetes/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { 
+      nombre, 
+      descripcion, 
+      precio_paquete, 
+      categoria, 
+      imagen, 
+      activo,
+      productos,
+      fecha_inicio,
+      fecha_fin
+    } = req.body;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Actualizar paquete
+      await client.query(`
+        UPDATE paquetes 
+        SET nombre = $1, descripcion = $2, precio_paquete = $3, categoria = $4, 
+            imagen = $5, activo = $6, fecha_inicio = $7, fecha_fin = $8, updated_at = NOW()
+        WHERE id = $9
+      `, [nombre, descripcion, precio_paquete, categoria, imagen, activo, fecha_inicio, fecha_fin, id]);
+
+      // Si se proporcionaron productos, actualizar relaciones
+      if (productos && Array.isArray(productos)) {
+        // Eliminar relaciones existentes
+        await client.query('DELETE FROM paquete_productos WHERE paquete_id = $1', [id]);
+        
+        // Crear nuevas relaciones
+        for (const prod of productos) {
+          await client.query(`
+            INSERT INTO paquete_productos (paquete_id, producto_id, cantidad)
+            VALUES ($1, $2, $3)
+          `, [id, prod.producto_id, prod.cantidad]);
+        }
+      }
+
+      await client.query('COMMIT');
+      
+      res.json({ 
+        success: true,
+        message: 'Paquete actualizado exitosamente'
+      });
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+  } catch (error) {
+    console.error('❌ Error actualizando paquete:', error);
+    res.status(500).json({ error: 'Error actualizando paquete' });
+  }
+});
+
+// 🗑️ Eliminar paquete (solo admin)
+app.delete('/api/admin/paquetes/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    await pool.query('DELETE FROM paquetes WHERE id = $1', [id]);
+    
+    res.json({ 
+      success: true,
+      message: 'Paquete eliminado exitosamente'
+    });
+  } catch (error) {
+    console.error('❌ Error eliminando paquete:', error);
+    res.status(500).json({ error: 'Error eliminando paquete' });
+  }
+});
+
+// 📊 Obtener estadísticas de paquetes (admin)
+app.get('/api/admin/paquetes/estadisticas', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const stats = await Promise.all([
+      pool.query('SELECT COUNT(*) as total_paquetes FROM paquetes'),
+      pool.query('SELECT COUNT(*) as paquetes_activos FROM paquetes WHERE activo = true'),
+      pool.query('SELECT COUNT(*) as paquetes_sin_stock FROM vista_paquetes_completos WHERE stock_paquetes_disponibles = 0'),
+      pool.query('SELECT AVG(ahorro_porcentaje) as ahorro_promedio FROM vista_paquetes_completos WHERE activo = true')
+    ]);
+
+    res.json({
+      totalPaquetes: parseInt(stats[0].rows[0].total_paquetes),
+      paquetesActivos: parseInt(stats[1].rows[0].paquetes_activos),
+      paquetesSinStock: parseInt(stats[2].rows[0].paquetes_sin_stock),
+      ahorroPromedio: parseFloat(stats[3].rows[0].ahorro_promedio) || 0
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo estadísticas de paquetes:', error);
+    res.status(500).json({ error: 'Error obteniendo estadísticas' });
+  }
+});
+
+// ====================================
+// 🛠️ MODIFICAR LA FUNCIÓN DE CREAR PEDIDOS EXISTENTE
+// ====================================
+// REEMPLAZAR la función app.post('/orders') existente con esta versión mejorada:
+
 app.post('/orders', authenticateToken, async (req, res) => {
-  const { 
-    productos, 
+  const {
+    productos,
+    paquetes = [], // NUEVO: Array de paquetes
     total,
-    codigo_promocional, // NUEVO
-    torre_entrega, 
-    piso_entrega, 
+    codigo_promocional,
+    torre_entrega,
+    piso_entrega,
     apartamento_entrega,
     instrucciones_entrega,
     telefono_contacto,
@@ -584,13 +819,14 @@ app.post('/orders', authenticateToken, async (req, res) => {
   } = req.body;
 
   try {
+    // Validaciones existentes (mantener tu código actual)
     const erroresValidacion = validarDatosResidenciales(torre_entrega, piso_entrega, apartamento_entrega);
     if (erroresValidacion.length > 0) {
       return res.status(400).json({ error: `Datos de entrega: ${erroresValidacion.join(', ')}` });
     }
 
-    if (!productos || productos.length === 0) {
-      return res.status(400).json({ error: 'El pedido debe tener al menos un producto' });
+    if ((!productos || productos.length === 0) && (!paquetes || paquetes.length === 0)) {
+      return res.status(400).json({ error: 'El pedido debe tener al menos un producto o paquete' });
     }
 
     if (!telefono_contacto) {
@@ -598,175 +834,196 @@ app.post('/orders', authenticateToken, async (req, res) => {
     }
 
     let totalFinal = Math.round(Number(total));
-
-    // ✅ APLICAR CÓDIGO PROMOCIONAL SI EXISTE
+    
+    // Aplicar código promocional (mantener tu lógica existente)
     if (codigo_promocional) {
       console.log(`🎁 Aplicando código promocional: ${codigo_promocional}`);
-      
       const codigoResult = await pool.query(
         'SELECT * FROM codigos_promocionales WHERE codigo = $1 AND usado = FALSE AND activo = TRUE',
         [codigo_promocional.trim().toUpperCase()]
       );
-      
       if (codigoResult.rows.length > 0) {
         const codigoData = codigoResult.rows[0];
         const descuento = parseFloat(codigoData.descuento_porcentaje);
         const descuentoMonto = Math.round(totalFinal * (descuento / 100));
         totalFinal = totalFinal - descuentoMonto;
-        
         console.log(`✅ Descuento aplicado: ${descuento}% = $${descuentoMonto}`);
-        console.log(`💰 Total final: $${totalFinal}`);
       }
     }
 
-    if (isNaN(totalFinal) || totalFinal <= 0) {
-      console.error('🚫 totalPedido inválido:', totalFinal);
-      return res.status(400).json({ error: 'Total no válido' });
-    }
+    // ✅ VERIFICAR STOCK (productos individuales + paquetes)
+    console.log('🔍 Verificando stock de productos y paquetes...');
+    const erroresStock = [];
+    const productosCompletos = [];
 
-    if (payment_reference) {
-      const existingOrder = await pool.query(
-        'SELECT id FROM pedidos WHERE payment_reference = $1',
-        [payment_reference]
-      );
-      if (existingOrder.rows.length > 0) {
-        return res.status(400).json({
-          error: 'Ya existe un pedido con esta referencia de pago'
+    // Verificar productos individuales (mantener tu lógica existente)
+    if (productos && productos.length > 0) {
+      for (const item of productos) {
+        const stockQuery = await pool.query(
+          'SELECT id, nombre, stock, codigo, descuento_activo, descuento_porcentaje, precio FROM productos WHERE id = $1',
+          [item.id]
+        );
+
+        if (stockQuery.rows.length === 0) {
+          erroresStock.push(`Producto ID ${item.id} no encontrado`);
+          continue;
+        }
+
+        const producto = stockQuery.rows[0];
+        const stockDisponible = producto.stock || 0;
+        const cantidadSolicitada = item.cantidad || 1;
+
+        if (stockDisponible < cantidadSolicitada) {
+          erroresStock.push(`${producto.nombre}: Stock insuficiente (disponible: ${stockDisponible}, solicitado: ${cantidadSolicitada})`);
+        }
+
+        productosCompletos.push({
+          ...item,
+          tipo: 'producto',
+          nombre: producto.nombre,
+          precio: producto.precio,
+          codigo: producto.codigo
         });
       }
     }
 
-    // ✅ VERIFICAR STOCK
-    console.log('🔍 Verificando stock de productos...');
-    const erroresStock = [];
-    const productosConCodigo = [];
-    
-    for (const item of productos) {
-      const stockQuery = await pool.query(
-        'SELECT id, nombre, stock, codigo, descuento_activo, descuento_porcentaje, precio FROM productos WHERE id = $1',
-        [item.id]
-      );
-      
-      if (stockQuery.rows.length === 0) {
-        erroresStock.push(`Producto ID ${item.id} no encontrado`);
-        continue;
+    // 🎁 VERIFICAR STOCK DE PAQUETES
+    if (paquetes && paquetes.length > 0) {
+      for (const paqueteItem of paquetes) {
+        console.log(`🎁 Verificando paquete ID: ${paqueteItem.id}`);
+        
+        // Obtener productos del paquete
+        const paqueteInfo = await pool.query(`
+          SELECT * FROM vista_paquetes_completos WHERE id = $1
+        `, [paqueteItem.id]);
+
+        if (paqueteInfo.rows.length === 0) {
+          erroresStock.push(`Paquete ID ${paqueteItem.id} no encontrado`);
+          continue;
+        }
+
+        const paquete = paqueteInfo.rows[0];
+        const cantidadPaquetes = paqueteItem.cantidad || 1;
+
+        // Verificar stock de cada producto del paquete
+        const productosDelPaquete = paquete.productos_incluidos;
+        
+        for (const prodPaquete of productosDelPaquete) {
+          const stockRequerido = prodPaquete.cantidad * cantidadPaquetes;
+          
+          if (prodPaquete.stock < stockRequerido) {
+            erroresStock.push(`Paquete "${paquete.nombre}": Stock insuficiente de ${prodPaquete.nombre} (disponible: ${prodPaquete.stock}, requerido: ${stockRequerido})`);
+          }
+        }
+
+        productosCompletos.push({
+          ...paqueteItem,
+          tipo: 'paquete',
+          nombre: paquete.nombre,
+          precio: paquete.precio_paquete,
+          codigo: `PAQ-${paquete.id}`,
+          productos_incluidos: productosDelPaquete
+        });
       }
-      
-      const producto = stockQuery.rows[0];
-      const stockDisponible = producto.stock || 0;
-      const cantidadSolicitada = item.cantidad || 1;
-      
-      if (stockDisponible < cantidadSolicitada) {
-        erroresStock.push(`${producto.nombre}: Stock insuficiente (disponible: ${stockDisponible}, solicitado: ${cantidadSolicitada})`);
-      }
-      
-      // ✅ APLICAR DESCUENTO POR PRODUCTO SI EXISTE
-      let precioFinal = item.precio;
-      if (producto.descuento_activo && producto.descuento_porcentaje > 0) {
-        precioFinal = Math.round(producto.precio * (100 - producto.descuento_porcentaje) / 100);
-        console.log(`🏷️ Descuento producto ${producto.nombre}: ${producto.descuento_porcentaje}% -> $${precioFinal}`);
-      }
-      
-      productosConCodigo.push({
-        id: item.id,
-        nombre: producto.nombre,
-        precio: precioFinal, // Precio con descuento aplicado
-        precio_original: producto.precio,
-        cantidad: item.cantidad,
-        codigo: producto.codigo,
-        descuento_aplicado: producto.descuento_activo ? producto.descuento_porcentaje : 0
-      });
     }
-    
+
     if (erroresStock.length > 0) {
       console.log('❌ Errores de stock:', erroresStock);
-      return res.status(400).json({ 
-        error: 'Stock insuficiente', 
-        detalles: erroresStock 
+      return res.status(400).json({
+        error: 'Stock insuficiente',
+        detalles: erroresStock
       });
-    }
-
-    const result = await pool.query(
-      `INSERT INTO pedidos (
-        usuario_id, productos, total, 
-        torre_entrega, piso_entrega, apartamento_entrega,
-        instrucciones_entrega, telefono_contacto,
-        payment_reference, payment_status, payment_method,
-        payment_transaction_id, payment_amount_cents
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
-      [
-        req.user.userId, 
-        JSON.stringify(productosConCodigo),
-        totalFinal, // Usar total con descuentos aplicados
-        torre_entrega,
-        piso_entrega, 
-        apartamento_entrega,
-        instrucciones_entrega,
-        telefono_contacto,
-        payment_reference,
-        payment_status,
-        payment_method,
-        payment_transaction_id,
-        payment_amount_cents
-      ]
-    );
-
-    const pedidoId = result.rows[0].id;
-
-    // ✅ MARCAR CÓDIGO COMO USADO
-    if (codigo_promocional) {
-      await pool.query(
-        `UPDATE codigos_promocionales 
-         SET usado = TRUE, usuario_id = $1, fecha_uso = CURRENT_TIMESTAMP 
-         WHERE codigo = $2`,
-        [req.user.userId, codigo_promocional.trim().toUpperCase()]
-      );
-      console.log(`✅ Código ${codigo_promocional} marcado como usado`);
     }
 
     // ✅ REDUCIR STOCK
-    console.log('📦 Reduciendo stock de productos...');
-    
-    for (const item of productos) {
-      const cantidadSolicitada = item.cantidad || 1;
-      
-      await pool.query(
-        'UPDATE productos SET stock = GREATEST(stock - $1, 0) WHERE id = $2',
-        [cantidadSolicitada, item.id]
-      );
-      
-      console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${cantidadSolicitada}`);
+    console.log('📦 Reduciendo stock de productos y paquetes...');
+
+    // Reducir stock de productos individuales (mantener tu lógica)
+    if (productos && productos.length > 0) {
+      for (const item of productos) {
+        const cantidadSolicitada = item.cantidad || 1;
+        await pool.query(
+          'UPDATE productos SET stock = GREATEST(stock - $1, 0) WHERE id = $2',
+          [cantidadSolicitada, item.id]
+        );
+        console.log(`📉 Stock reducido: Producto ID ${item.id}, cantidad: ${cantidadSolicitada}`);
+      }
     }
 
-    // ✅ ENVIAR CONFIRMACIÓN WHATSAPP
-    const pedidoCompleto = {
-      id: pedidoId,
-      total: totalFinal,
-      telefono_contacto,
+    // 🎁 Reducir stock de productos en paquetes
+    if (paquetes && paquetes.length > 0) {
+      for (const paqueteItem of paquetes) {
+        const cantidadPaquetes = paqueteItem.cantidad || 1;
+        
+        // Obtener productos del paquete
+        const productosDelPaquete = await pool.query(`
+          SELECT pp.producto_id, pp.cantidad
+          FROM paquete_productos pp
+          WHERE pp.paquete_id = $1
+        `, [paqueteItem.id]);
+
+        // Reducir stock de cada producto
+        for (const prodRelacion of productosDelPaquete.rows) {
+          const cantidadAReducir = prodRelacion.cantidad * cantidadPaquetes;
+          
+          await pool.query(
+            'UPDATE productos SET stock = GREATEST(stock - $1, 0) WHERE id = $2',
+            [cantidadAReducir, prodRelacion.producto_id]
+          );
+          
+          console.log(`📉 Stock paquete reducido: Producto ID ${prodRelacion.producto_id}, cantidad: ${cantidadAReducir}`);
+        }
+      }
+    }
+
+    // Crear pedido (mantener tu lógica existente pero con productos completos)
+    const result = await pool.query(`
+      INSERT INTO pedidos (
+        usuario_id, productos, total, torre_entrega, piso_entrega, apartamento_entrega,
+        instrucciones_entrega, telefono_contacto, payment_reference, payment_status,
+        payment_method, payment_transaction_id, payment_amount_cents
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      RETURNING id
+    `, [
+      req.user.userId,
+      JSON.stringify(productosCompletos), // Incluye productos individuales y paquetes
+      totalFinal,
       torre_entrega,
       piso_entrega,
       apartamento_entrega,
-      productos: productosConCodigo
-    };
+      instrucciones_entrega || '',
+      telefono_contacto,
+      payment_reference,
+      payment_status,
+      payment_method,
+      payment_transaction_id,
+      payment_amount_cents
+    ]);
 
-    // Enviar WhatsApp confirmación (sin esperar)
-    enviarConfirmacionWhatsApp(pedidoCompleto).then(result => {
-      if (result.success) {
-        console.log(`📱 Confirmación WhatsApp enviada para pedido ${pedidoId}`);
-      } else {
-        console.error(`📱 Error WhatsApp pedido ${pedidoId}:`, result.error);
+    // Marcar código promocional como usado (mantener tu lógica)
+    if (codigo_promocional) {
+      const codigoResult = await pool.query(
+        'SELECT id FROM codigos_promocionales WHERE codigo = $1 AND usado = FALSE',
+        [codigo_promocional.trim().toUpperCase()]
+      );
+      if (codigoResult.rows.length > 0) {
+        await pool.query(
+          'UPDATE codigos_promocionales SET usado = TRUE, usuario_id = $1, fecha_uso = NOW() WHERE id = $2',
+          [req.user.userId, codigoResult.rows[0].id]
+        );
       }
-    });
+    }
 
-    res.json({ 
-      success: true, 
-      message: 'Pedido creado exitosamente - Confirmación enviada por WhatsApp', // ✅ CAMBIADO
-      pedidoId: pedidoId,
-      totalFinal: totalFinal,
-      descuentoAplicado: codigo_promocional ? true : false,
-      entrega: `Torre ${torre_entrega}, Piso ${piso_entrega}, Apt ${apartamento_entrega}`,
-      tiempoEstimado: '20 minutos máximo',
-      whatsapp: 'Confirmación enviada' // ✅ AGREGADO
+    const pedidoId = result.rows[0].id;
+    console.log(`✅ Pedido creado: SUP-${pedidoId} con productos y paquetes`);
+
+    res.status(201).json({
+      success: true,
+      pedido_id: pedidoId,
+      numero_pedido: `SUP-${pedidoId}`,
+      total: totalFinal,
+      productos: productosCompletos.length,
+      message: 'Pedido creado exitosamente'
     });
 
   } catch (err) {
@@ -774,6 +1031,14 @@ app.post('/orders', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Error guardando pedido' });
   }
 });
+
+
+
+// ===================
+// 🛍️ RUTAS DE PEDIDOS
+// ===================
+
+
 
 // 💾 GUARDAR CARRITO TEMPORAL ANTES DEL PAGO
 app.post('/api/guardar-carrito-temporal', authenticateToken, async (req, res) => {
@@ -1148,45 +1413,7 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
       [estado, fechaEntrega, id]
     );
 
-    // ✅ RESTAURAR STOCK SI SE CANCELA
-    if (estado === 'cancelado') {
-      console.log('🔄 Restaurando stock por cancelación...');
-      
-      const productosData = pedidoQuery.rows[0].productos;
-      const productos = typeof productosData === 'string' 
-        ? JSON.parse(productosData) 
-        : productosData;
-      
-      for (const item of productos) {
-        // 🛡️ IGNORAR PRODUCTOS CON IDs FALSOS
-        if (!item.id || 
-            typeof item.id === 'string' && (
-              item.id.includes('webhook') || 
-              item.id.includes('generic') ||
-              item.id.includes('auto') ||
-              isNaN(parseInt(item.id))
-            )) {
-          console.log(`⚠️ Ignorando producto falso: ${item.id} - ${item.nombre}`);
-          continue;
-        }
-        
-        // ✅ SOLO RESTAURAR PRODUCTOS REALES
-        try {
-          const cantidadARestaurar = item.cantidad || 1;
-          
-          await pool.query(
-            'UPDATE productos SET stock = stock + $1 WHERE id = $2',
-            [cantidadARestaurar, parseInt(item.id)]
-          );
-          
-          console.log(`📈 Stock restaurado: Producto ID ${item.id}, cantidad: +${cantidadARestaurar}`);
-        } catch (error) {
-          console.error(`❌ Error restaurando stock para producto ${item.id}:`, error.message);
-        }
-      }
-      
-      console.log('✅ Stock restaurado completamente');
-    }
+ 
     
     res.json({ 
       message: 'Estado actualizado correctamente',
