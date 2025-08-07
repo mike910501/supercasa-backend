@@ -1615,6 +1615,9 @@ let datosEntrega = {};
 if (carritoQuery.rows.length > 0 && carritoQuery.rows[0].datos_entrega) {
   datosEntrega = carritoQuery.rows[0].datos_entrega;
   console.log('✅ Datos entrega encontrados:', datosEntrega);
+  console.log('🔍 DEBUG - deliveryData completo:', JSON.stringify(datosEntrega, null, 2));
+console.log('🔍 DEBUG - telefono_contacto específico:', datosEntrega.telefono_contacto);
+console.log('🔍 DEBUG - Todas las propiedades:', Object.keys(datosEntrega));
 } else {
   console.log('⚠️ No se encontraron datos de entrega, usando usuario');
 }
