@@ -1603,7 +1603,22 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
                 }];
               }
             }
-            
+            // ✅ OBTENER DATOS DE ENTREGA DEL CARRITO TEMPORAL
+console.log('📱 Obteniendo datos de entrega del carrito temporal...');
+
+const carritoQuery = await pool.query(
+  'SELECT datos_entrega FROM carrito_temporal WHERE referencia = $1',
+  [reference]
+);
+
+let datosEntrega = {};
+if (carritoQuery.rows.length > 0 && carritoQuery.rows[0].datos_entrega) {
+  datosEntrega = carritoQuery.rows[0].datos_entrega;
+  console.log('✅ Datos entrega encontrados:', datosEntrega);
+} else {
+  console.log('⚠️ No se encontraron datos de entrega, usando usuario');
+}
+
             const pedidoWebhook = await pool.query(
   `INSERT INTO pedidos (
     usuario_id, productos, total, 
@@ -1613,20 +1628,20 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
   RETURNING id`,
   [
-    usuario.id,
-    JSON.stringify(productosReales),
-    transaction.amount_in_cents / 100,
-    usuario.torre || '1',
-    parseInt(usuario.piso) || 1,    // ← CONVERSIÓN A INTEGER
-    usuario.apartamento || '101',
-    'Webhook auto',
-    reference,
-    'APPROVED',
-    paymentMethod,
-    transactionId,
-    transaction.amount_in_cents,
-    'pendiente'
-  ]
+  usuario.id,
+  JSON.stringify(productosReales),
+  transaction.amount_in_cents / 100,
+  datosEntrega.torre_entrega || usuario.torre || '1',        // ✅ CAMBIO
+  parseInt(datosEntrega.piso_entrega || usuario.piso) || 1,  // ✅ CAMBIO
+  datosEntrega.apartamento_entrega || usuario.apartamento || '101', // ✅ CAMBIO
+  datosEntrega.telefono_contacto || usuario.telefono,       // ✅ CAMBIO PRINCIPAL
+  reference,
+  'APPROVED',
+  paymentMethod,
+  transactionId,
+  transaction.amount_in_cents,
+  'pendiente'
+]
 );
 
             // 🆕 LOG ESPECÍFICO PARA TARJETAS
