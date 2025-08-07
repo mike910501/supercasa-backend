@@ -4019,6 +4019,24 @@ app.get('/test-whatsapp-libre', async (req, res) => {
   }
 });
 
+// ✅ RECREAR VISTA CON IMÁGENES
+pool.query(`
+  DROP VIEW IF EXISTS vista_paquetes_completos;
+  CREATE VIEW vista_paquetes_completos AS
+  SELECT 
+    p.id, p.nombre, p.descripcion, p.precio_paquete, p.categoria, p.imagen, p.activo, p.fecha_inicio, p.fecha_fin,
+    COALESCE(SUM(prod.precio * pp.cantidad), 0) as precio_individual_total,
+    COALESCE(SUM(prod.precio * pp.cantidad), 0) - p.precio_paquete as ahorro_monto,
+    ROUND(((COALESCE(SUM(prod.precio * pp.cantidad), 0) - p.precio_paquete) / NULLIF(COALESCE(SUM(prod.precio * pp.cantidad), 0), 0)) * 100, 2) as ahorro_porcentaje,
+    JSON_AGG(JSON_BUILD_OBJECT('producto_id', prod.id, 'nombre', prod.nombre, 'precio', prod.precio, 'cantidad', pp.cantidad, 'stock', prod.stock, 'imagen', prod.imagen, 'subtotal', prod.precio * pp.cantidad) ORDER BY prod.nombre) as productos_incluidos,
+    CASE WHEN COUNT(prod.id) = 0 THEN 0 ELSE MIN(FLOOR(prod.stock / pp.cantidad)) END as stock_paquetes_disponibles
+  FROM paquetes p
+  LEFT JOIN paquete_productos pp ON p.id = pp.paquete_id
+  LEFT JOIN productos prod ON pp.producto_id = prod.id
+  GROUP BY p.id, p.nombre, p.descripcion, p.precio_paquete, p.categoria, p.imagen, p.activo, p.fecha_inicio, p.fecha_fin;
+`).then(() => console.log("✅ Vista paquetes actualizada con imágenes"))
+  .catch(err => console.log("⚠️ Error actualizando vista:", err.message));
+
 console.log('✅ WhatsApp PRODUCCIÓN con Templates configurado');
 console.log('🔗 Webhook: https://supercasa-backend-vvu1.onrender.com/webhook/whatsapp');
 console.log('📝 Templates requeridos para confirmaciones automáticas');
