@@ -3581,9 +3581,13 @@ async function enviarConfirmacionWhatsApp(pedidoData) {
     
     console.log(`📱 Enviando confirmación TEMPLATE ${numeroPedido} a ${telefono_contacto}`);
 
-    // Normalizar número
-    const numeroLimpio = telefono_contacto.replace(/\D/g, '');
-    const numeroWhatsApp = `whatsapp:+57${numeroLimpio}`;
+    if (typeof telefono_contacto !== 'string') {
+  console.error('❌ Error: telefono_contacto no está definido o no es una cadena.', telefono_contacto);
+  return { success: false, error: 'Número de teléfono no válido para WhatsApp.' };
+}
+
+const numeroLimpio = telefono_contacto.replace(/\D/g, '');
+const numeroWhatsApp = `whatsapp:+57${numeroLimpio}`;
 
     const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     
