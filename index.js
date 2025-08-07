@@ -1635,20 +1635,32 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
             } else {
               console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con productos reales`);
             }
-            // ✅ AGREGAR ESTA SECCIÓN DESPUÉS DE LA LÍNEA 1637
-// (Después de console.log del pedido creado exitosamente)
+           // ✅ REEMPLAZAR EL CÓDIGO ANTERIOR CON ESTE CÓDIGO CORREGIDO
 
-// ✅ ENVIAR WHATSAPP PARA PAGOS DIGITALES
+// ✅ ENVIAR WHATSAPP PARA PAGOS DIGITALES - VERSIÓN CORREGIDA
 try {
   console.log('📱 Enviando confirmación WhatsApp para pago digital...');
   
   const pedidoCreado = pedidoWebhook.rows[0];
   
+  // ✅ OBTENER DATOS COMPLETOS DEL USUARIO DESDE LA BD
+  const usuarioQuery = await pool.query(
+    'SELECT nombre, telefono, email FROM usuarios WHERE id = $1',
+    [pedidoCreado.usuario_id]
+  );
+  
+  const usuarioData = usuarioQuery.rows[0];
+  
+  if (!usuarioData || !usuarioData.telefono) {
+    console.log('⚠️ No se puede enviar WhatsApp: teléfono de usuario no encontrado');
+    throw new Error('Teléfono de usuario no disponible');
+  }
+  
   const pedidoCompleto = {
     id: pedidoCreado.id,
     numeroPedido: `SUP-${pedidoCreado.id}`,
-    telefono_contacto: pedidoCreado.telefono_contacto,
-    cliente_email: pedidoCreado.cliente_email || event.data.customer_email,
+    telefono_contacto: usuarioData.telefono, // ✅ TELÉFONO DESDE BD
+    cliente_email: usuarioData.email,
     total: pedidoCreado.total,
     torre_entrega: pedidoCreado.torre_entrega,
     piso_entrega: pedidoCreado.piso_entrega,
@@ -1658,6 +1670,8 @@ try {
     payment_status: 'APPROVED'
   };
 
+  console.log('📱 Datos WhatsApp preparados para:', usuarioData.telefono);
+  
   const whatsappResult = await enviarConfirmacionWhatsApp(pedidoCompleto);
   console.log('📱 WhatsApp para pago digital enviado:', whatsappResult);
   
