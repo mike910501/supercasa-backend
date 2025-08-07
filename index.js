@@ -1635,6 +1635,37 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
             } else {
               console.log(`✅ Pedido ${pedidoWebhook.rows[0].id} creado desde webhook con productos reales`);
             }
+            // ✅ AGREGAR ESTA SECCIÓN DESPUÉS DE LA LÍNEA 1637
+// (Después de console.log del pedido creado exitosamente)
+
+// ✅ ENVIAR WHATSAPP PARA PAGOS DIGITALES
+try {
+  console.log('📱 Enviando confirmación WhatsApp para pago digital...');
+  
+  const pedidoCreado = pedidoWebhook.rows[0];
+  
+  const pedidoCompleto = {
+    id: pedidoCreado.id,
+    numeroPedido: `SUP-${pedidoCreado.id}`,
+    telefono_contacto: pedidoCreado.telefono_contacto,
+    cliente_email: pedidoCreado.cliente_email || event.data.customer_email,
+    total: pedidoCreado.total,
+    torre_entrega: pedidoCreado.torre_entrega,
+    piso_entrega: pedidoCreado.piso_entrega,
+    apartamento_entrega: pedidoCreado.apartamento_entrega,
+    productos: pedidoCreado.productos || productosReales,
+    payment_method: paymentMethod,
+    payment_status: 'APPROVED'
+  };
+
+  const whatsappResult = await enviarConfirmacionWhatsApp(pedidoCompleto);
+  console.log('📱 WhatsApp para pago digital enviado:', whatsappResult);
+  
+} catch (whatsappError) {
+  console.error('❌ Error WhatsApp en webhook (no crítico):', whatsappError);
+}
+
+// ✅ FIN DEL CÓDIGO A AGREGAR
 
           } else {
             console.log(`❌ Usuario no encontrado para email ${transaction.customer_email}`);
