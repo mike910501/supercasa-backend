@@ -1497,13 +1497,14 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
             let productosReales = [];
             
             // 💾 RECUPERAR CARRITO REAL DESDE TABLA TEMPORAL
+            let datosEntrega = {};
             console.log(`💾 Buscando carrito temporal para referencia: ${reference}`);
 
             const carritoTemp = await pool.query(
               'SELECT productos, datos_entrega FROM carrito_temporal WHERE referencia = $1',
               [reference]
             );
-
+            
             if (carritoTemp.rows.length > 0) {
               console.log('✅ Carrito temporal encontrado');
               
@@ -1517,9 +1518,9 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
                 ? JSON.parse(carritoTemp.rows[0].productos) 
                 : carritoTemp.rows[0].productos;
 
-              const datosEntrega = typeof carritoTemp.rows[0].datos_entrega === 'string' 
-                ? JSON.parse(carritoTemp.rows[0].datos_entrega) 
-                : carritoTemp.rows[0].datos_entrega;
+              datosEntrega = typeof carritoTemp.rows[0].datos_entrega === 'string' 
+  ? JSON.parse(carritoTemp.rows[0].datos_entrega) 
+  : carritoTemp.rows[0].datos_entrega;
               
               // Usar productos reales del carrito
               for (const item of productosCarrito) {
