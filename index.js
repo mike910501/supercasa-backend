@@ -1014,17 +1014,39 @@ app.post('/orders', authenticateToken, async (req, res) => {
       }
     }
 
-    const pedidoId = result.rows[0].id;
-    console.log(`✅ Pedido creado: SUP-${pedidoId} con productos y paquetes`);
+const pedidoId = result.rows[0].id;
+console.log(`✅ Pedido creado: SUP-${pedidoId} con productos y paquetes`);
 
-    res.status(201).json({
-      success: true,
-      pedido_id: pedidoId,
-      numero_pedido: `SUP-${pedidoId}`,
-      total: totalFinal,
-      productos: productosCompletos.length,
-      message: 'Pedido creado exitosamente'
-    });
+// ✅ ENVIAR CONFIRMACIÓN WHATSAPP
+console.log('📱 Preparando confirmación WhatsApp...');
+
+const pedidoCompleto = {
+  id: pedidoId,
+  numero_pedido: `SUP-${pedidoId}`,
+  total: totalFinal,
+  telefono_contacto: telefono_contacto,
+  torre_entrega: torre_entrega,
+  piso_entrega: piso_entrega,
+  apartamento_entrega: apartamento_entrega,
+  productos: productosCompletos,
+  cantidadItems: productosCompletos.reduce((sum, item) => sum + (item.cantidad || 1), 0)
+};
+
+try {
+  const whatsappResult = await enviarConfirmacionWhatsApp(pedidoCompleto);
+  console.log('📱 WhatsApp result:', whatsappResult);
+} catch (whatsappError) {
+  console.error('❌ Error WhatsApp (no crítico):', whatsappError);
+}
+
+res.status(201).json({
+  success: true,
+  pedido_id: pedidoId,
+  numero_pedido: `SUP-${pedidoId}`,
+  total: totalFinal,
+  productos: productosCompletos.length,
+  message: 'Pedido creado exitosamente'
+});
 
   } catch (err) {
     console.error('❌ Error guardando pedido:', err);
