@@ -2414,7 +2414,7 @@ console.log(`📤 Enviando transacción ${metodoPago} a WOMPI...`);
           reference,
           req.user.userId,
           JSON.stringify(productos),
-          JSON.stringify(datosEntrega)
+          JSON.stringify(req.body.datosEntrega)
         ]
       );
 
