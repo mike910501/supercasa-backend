@@ -2246,7 +2246,11 @@ app.post('/api/crear-pago', authenticateToken, async (req, res) => {
       cedula,
       banco // Para PSE
     } = req.body;
-
+    // ✅ AGREGAR ESTAS LÍNEAS DEBUG:
+console.log('🔍 DEBUG CREAR-PAGO - datosEntrega extraído:', datosEntrega);
+console.log('🔍 DEBUG CREAR-PAGO - datosEntrega tipo:', typeof datosEntrega);
+console.log('🔍 DEBUG CREAR-PAGO - req.body.datosEntrega:', req.body.datosEntrega);
+console.log('🔍 DEBUG CREAR-PAGO - telefono extraído:', telefono);
     console.log(`💳 Creando pago ${metodoPago} por $${monto}`);
 
     const crypto = await import('crypto');
@@ -2404,7 +2408,10 @@ console.log(`📤 Enviando transacción ${metodoPago} a WOMPI...`);
           fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
-
+         // ✅ AGREGAR LAS 3 LÍNEAS DEBUG AQUÍ:
+  console.log('🔍 DEBUG GUARDANDO - reference:', reference);
+  console.log('🔍 DEBUG GUARDANDO - productos:', JSON.stringify(productos));
+  console.log('🔍 DEBUG GUARDANDO - req.body.datosEntrega antes de guardar:', JSON.stringify(req.body.datosEntrega));
       await pool.query(
         `INSERT INTO carrito_temporal (referencia, usuario_id, productos, datos_entrega) 
          VALUES ($1, $2, $3, $4) 
