@@ -1603,24 +1603,7 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
                 }];
               }
             }
-            // ✅ OBTENER DATOS DE ENTREGA DEL CARRITO TEMPORAL
-console.log('📱 Obteniendo datos de entrega del carrito temporal...');
 
-const carritoQuery = await pool.query(
-  'SELECT datos_entrega FROM carrito_temporal WHERE referencia = $1',
-  [reference]
-);
-
-let datosEntrega = {};
-if (carritoQuery.rows.length > 0 && carritoQuery.rows[0].datos_entrega) {
-  datosEntrega = carritoQuery.rows[0].datos_entrega;
-  console.log('✅ Datos entrega encontrados:', datosEntrega);
-  console.log('🔍 DEBUG - deliveryData completo:', JSON.stringify(datosEntrega, null, 2));
-console.log('🔍 DEBUG - telefono_contacto específico:', datosEntrega.telefono_contacto);
-console.log('🔍 DEBUG - Todas las propiedades:', Object.keys(datosEntrega));
-} else {
-  console.log('⚠️ No se encontraron datos de entrega, usando usuario');
-}
 
             const pedidoWebhook = await pool.query(
   `INSERT INTO pedidos (
