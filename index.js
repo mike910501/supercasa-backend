@@ -1646,20 +1646,40 @@ try {
   
   const pedidoCreado = pedidoWebhook.rows[0];
   
-  // ✅ USAR DATOS QUE YA ESTÁN EN EL PEDIDO (igual que efectivo)
+  // ✅ ENVIAR WHATSAPP PARA PAGOS DIGITALES - VERSIÓN CORREGIDA
+try {
+  console.log('📱 Enviando confirmación WhatsApp para pago digital...');
+  
+  const pedidoCreado = pedidoWebhook.rows[0];
+  
+  // 🔍 DEBUG LOGS PARA IDENTIFICAR DATOS DISPONIBLES
+  console.log('🔍 DEBUG - datosEntrega.telefono_contacto:', datosEntrega.telefono_contacto);
+  console.log('🔍 DEBUG - usuario.telefono:', usuario.telefono);
+  console.log('🔍 DEBUG - pedidoCreado completo:', pedidoCreado);
+  
+  // ✅ USAR DATOS DIRECTOS COMO EN EFECTIVO (NO del pedidoCreado)
   const pedidoCompleto = {
     id: pedidoCreado.id,
     numeroPedido: `SUP-${pedidoCreado.id}`,
-    telefono_contacto: pedidoCreado.telefono_contacto, // ✅ YA ESTÁ EN EL PEDIDO
-    cliente_email: pedidoCreado.cliente_email,
-    total: pedidoCreado.total,
-    torre_entrega: pedidoCreado.torre_entrega,
-    piso_entrega: pedidoCreado.piso_entrega,
-    apartamento_entrega: pedidoCreado.apartamento_entrega,
-    productos: pedidoCreado.productos || productosReales,
+    telefono_contacto: datosEntrega.telefono_contacto || usuario.telefono || '3001399242', // ✅ DIRECTO
+    cliente_email: transaction.customer_email, // ✅ DIRECTO DE TRANSACCIÓN
+    total: transaction.amount_in_cents / 100, // ✅ DIRECTO DE TRANSACCIÓN
+    torre_entrega: datosEntrega.torre_entrega || usuario.torre || '1', // ✅ DIRECTO
+    piso_entrega: datosEntrega.piso_entrega || usuario.piso || 1, // ✅ DIRECTO
+    apartamento_entrega: datosEntrega.apartamento_entrega || usuario.apartamento || '101', // ✅ DIRECTO
+    productos: productosReales, // ✅ DIRECTO
     payment_method: paymentMethod,
     payment_status: 'APPROVED'
   };
+
+  console.log('📱 Datos WhatsApp preparados para:', pedidoCompleto.telefono_contacto);
+  
+  const whatsappResult = await enviarConfirmacionWhatsApp(pedidoCompleto);
+  console.log('📱 WhatsApp para pago digital enviado:', whatsappResult);
+  
+} catch (whatsappError) {
+  console.error('❌ Error WhatsApp en webhook (no crítico):', whatsappError);
+}
 
   console.log('📱 Datos WhatsApp preparados para:', pedidoCreado.telefono_contacto);
   
