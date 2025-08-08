@@ -2146,7 +2146,7 @@ app.get('/test-pse', async (req, res) => {
         payment_description: 'Compra SuperCasa' // ✅ AGREGADO
       },
       reference: reference,
-      redirect_url: 'https://supercasa2.netlify.app',
+      redirect_url: 'https://tiendasupercasa.com/',
       acceptance_token: acceptanceToken,
       personal_data_auth_token: personalDataToken
     };
@@ -2206,7 +2206,7 @@ app.get('/test-nequi', async (req, res) => {
         phone_number: '3001234567' // ✅ CORREGIDO: phone_number no phone
       },
       reference: reference,
-      redirect_url: 'https://supercasa2.netlify.app',
+      redirect_url: 'https://tiendasupercasa.com/',
       acceptance_token: acceptanceToken,
       personal_data_auth_token: personalDataToken
     };
@@ -2341,7 +2341,7 @@ console.log('🔍 DEBUG CREAR-PAGO - telefono extraído:', telefono);
       customer_email: req.user.email,
       payment_method: paymentMethod,
       reference: reference,
-      redirect_url: 'https://supercasa2.netlify.app',
+      redirect_url: 'https://tiendasupercasa.com/',
       acceptance_token: acceptanceToken,
       personal_data_auth_token: personalDataToken
     };
@@ -2741,7 +2741,7 @@ app.get('/debug-daviplata-last', async (req, res) => {
         user_legal_id: '1024518451' // Tu cédula real
       },
       reference: reference,
-      redirect_url: 'https://supercasa2.netlify.app',
+      redirect_url: 'https://tiendasupercasa.com/',
       acceptance_token: acceptanceToken,
       personal_data_auth_token: personalDataToken
     };
