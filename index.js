@@ -1423,78 +1423,86 @@ app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) 
 
     const result = await pool.query(query, params);
 
-   // ✅ CALCULAR DESGLOSE DE ENVÍO PARA CADA PEDIDO
+    // ✅ CALCULAR DESGLOSE DE ENVÍO PARA CADA PEDIDO (CORREGIDO)
 const pedidosConDesglose = result.rows.map(pedido => {
   const metodoPago = pedido.payment_reference ? 'digital' : 'efectivo';
   
-  // Inicializar valores
-  let costoEnvio = null; // null = sin información de envío (pedidos antiguos)
-  let subtotal = pedido.total;
+  // El total en BD es SOLO productos, necesitamos AGREGAR envío
+  let costoEnvio = null;
+  let subtotal = pedido.total; // Productos
+  let totalConEnvio = pedido.total; // Total final
+  let tieneDesglose = false;
   
-  // Solo aplicar lógica de envío a pedidos de HOY en adelante
-  const fechaPedido = new Date(pedido.fecha);
-  const fechaHoy = new Date('2025-08-10'); // Fecha de implementación
   
-  if (fechaPedido >= fechaHoy) {
-    console.log(`🔍 Procesando pedido ${pedido.id}: Total=$${pedido.total}, Método=${metodoPago}`);
-    
-    if (metodoPago === 'efectivo') {
-      if (pedido.total >= 15000) {
-        costoEnvio = 0; // Envío gratis
-        subtotal = pedido.total;
-        console.log(`✅ Efectivo >= $15k: Envío GRATIS`);
-      } else if (pedido.total >= 5000) {
-        costoEnvio = 2000; // Envío pagado
-        subtotal = pedido.total - 2000;
-        console.log(`💰 Efectivo $5k-$14k: Envío $2,000`);
-      } else {
-        costoEnvio = null; // No válido
-        console.log(`❌ Efectivo < $5k: No válido`);
-      }
-    } else { // digital
-      if (pedido.total >= 20000) {
-        costoEnvio = 0; // Envío gratis
-        subtotal = pedido.total;
-        console.log(`✅ Digital >= $20k: Envío GRATIS`);
-      } else {
-        costoEnvio = null; // Digital no disponible para montos menores
-        console.log(`❌ Digital < $20k: No válido`);
-      }
+  
+  // NUEVA LÓGICA: AGREGAR envío al total de productos
+  if (metodoPago === 'efectivo') {
+    if (pedido.total >= 15000) {
+      // Efectivo >= $15k → Envío gratis
+      costoEnvio = 0;
+      subtotal = pedido.total;
+      totalConEnvio = pedido.total + 0; // Sin envío
+      tieneDesglose = true;
+      
+    } else if (pedido.total >= 5000) {
+      // Efectivo >= $5k → Cobrar envío
+      costoEnvio = 2000;
+      subtotal = pedido.total;
+      totalConEnvio = pedido.total + 2000; // Con envío
+      tieneDesglose = true;
+      
+    } else {
+      // < $5k → Sin desglose
+      costoEnvio = null;
+      tieneDesglose = false;
+      
     }
-  } else {
-    console.log(`📅 Pedido ${pedido.id} es anterior a implementación: sin desglose`);
+  } else { // digital
+    if (pedido.total >= 20000) {
+      // Digital >= $20k → Envío gratis
+      costoEnvio = 0;
+      subtotal = pedido.total;
+      totalConEnvio = pedido.total + 0;
+      tieneDesglose = true;
+      
+    } else {
+      // Digital < $20k → Sin desglose
+      costoEnvio = null;
+      tieneDesglose = false;
+      
+    }
   }
   
   return {
-    ...pedido,
-    productos: typeof pedido.productos === 'string' 
-      ? JSON.parse(pedido.productos)
-      : pedido.productos,
-    total: parseFloat(pedido.total),
-    subtotal: subtotal,
-    costo_envio: costoEnvio, // null, 0, o 2000
-    metodo_pago: metodoPago,
-    tiene_desglose: costoEnvio !== null, // Nuevo campo para saber si mostrar desglose
-    estado: pedido.estado,
-    fecha_pedido: pedido.fecha,
-    fecha_entrega: pedido.fecha_entrega,
-    torre_entrega: pedido.torre_entrega,
-    piso_entrega: pedido.piso_entrega,
-    apartamento_entrega: pedido.apartamento_entrega,
-    instrucciones_entrega: pedido.instrucciones_entrega,
-    horario_preferido: pedido.horario_preferido,
-    telefono_contacto: pedido.telefono_contacto,
-    payment_reference: pedido.payment_reference,
-    payment_status: pedido.payment_status,
-    payment_method: pedido.payment_method,
-    payment_transaction_id: pedido.payment_transaction_id,
-    payment_amount_cents: pedido.payment_amount_cents,
-    usuario: {
-      nombre: pedido.usuario_nombre,
-      email: pedido.usuario_email,
-      telefono: pedido.usuario_telefono
-    }
-  };
+  ...pedido,
+  productos: typeof pedido.productos === 'string' 
+    ? JSON.parse(pedido.productos)
+    : pedido.productos,
+  total: parseFloat(totalConEnvio), // Total CON envío
+  subtotal: subtotal, // Solo productos
+  costo_envio: costoEnvio,
+  metodo_pago: metodoPago,
+  tiene_desglose: tieneDesglose,
+  estado: pedido.estado,
+  fecha_pedido: pedido.fecha,
+  fecha_entrega: pedido.fecha_entrega,
+  torre_entrega: pedido.torre_entrega,
+  piso_entrega: pedido.piso_entrega,
+  apartamento_entrega: pedido.apartamento_entrega,
+  instrucciones_entrega: pedido.instrucciones_entrega,
+  horario_preferido: pedido.horario_preferido,
+  telefono_contacto: pedido.telefono_contacto,
+  payment_reference: pedido.payment_reference,
+  payment_status: pedido.payment_status,
+  payment_method: pedido.payment_method,
+  payment_transaction_id: pedido.payment_transaction_id,
+  payment_amount_cents: pedido.payment_amount_cents,
+  usuario: {
+    nombre: pedido.usuario_nombre,
+    email: pedido.usuario_email,
+    telefono: pedido.usuario_telefono
+  }
+};
 });
 
     res.json(pedidosConDesglose);
