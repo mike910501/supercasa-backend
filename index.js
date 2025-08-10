@@ -561,6 +561,57 @@ app.put('/productos/:id', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
+
+// ===================================
+// 🚚 ENDPOINT CALCULAR COSTO DE ENVÍO
+// ===================================
+app.post('/api/calcular-envio', authenticateToken, async (req, res) => {
+  try {
+    const { subtotal, metodoPago } = req.body;
+    
+    console.log(`🚚 REQUEST calcular envío - Subtotal: $${subtotal}, Método: ${metodoPago}`);
+    
+    // Validar datos de entrada
+    if (!subtotal || subtotal <= 0) {
+      return res.status(400).json({ error: 'Subtotal inválido' });
+    }
+    
+    if (!metodoPago || !['efectivo', 'digital'].includes(metodoPago)) {
+      return res.status(400).json({ error: 'Método de pago inválido' });
+    }
+    
+    // Calcular envío usando nuestra función
+    const resultado = calcularCostoEnvio(subtotal, metodoPago);
+    
+    // Si hay error (monto mínimo)
+    if (resultado.error) {
+      return res.status(400).json({ 
+        error: resultado.error,
+        codigo: resultado.codigo 
+      });
+    }
+    
+    // Calcular total final
+    const total = subtotal + resultado.costoEnvio;
+    
+    // Respuesta exitosa
+    res.json({
+      subtotal: Number(subtotal),
+      costoEnvio: resultado.costoEnvio,
+      total: total,
+      mensaje: resultado.mensaje,
+      envioGratis: resultado.envioGratis,
+      metodoPago: metodoPago
+    });
+    
+    console.log(`✅ Envío calculado - Costo: $${resultado.costoEnvio}, Total: $${total}`);
+    
+  } catch (error) {
+    console.error('❌ Error calculando envío:', error);
+    res.status(500).json({ error: 'Error interno calculando costo de envío' });
+  }
+});
+
 // ====================================
 // 🎁 RUTAS DE PAQUETES SUPERCASA
 // ====================================
@@ -2234,6 +2285,67 @@ app.get('/test-nequi', async (req, res) => {
   }
 });
 
+// ===================================
+// 🚚 FUNCIÓN CALCULAR COSTO DE ENVÍO (ACTUALIZADA)
+// ===================================
+function calcularCostoEnvio(subtotal, metodoPago) {
+  console.log(`🚚 Calculando envío: $${subtotal} - Método: ${metodoPago}`);
+  
+  // Validar monto mínimo absoluto
+  if (subtotal < 5000) {
+    return { 
+      error: 'Monto mínimo de compra: $5,000',
+      codigo: 'MONTO_MINIMO'
+    };
+  }
+  
+  // PAGO DIGITAL: Mínimo $20,000 para envío gratis
+  if (metodoPago === 'digital') {
+    if (subtotal < 20000) {
+      return { 
+        error: 'Monto mínimo para pago digital: $20,000',
+        codigo: 'MONTO_MINIMO_DIGITAL',
+        faltante: 20000 - subtotal
+      };
+    } else {
+      console.log('✅ Envío gratis - Digital >= $20,000');
+      return { 
+        costoEnvio: 0, 
+        mensaje: '🎉 Envío gratis - Pago digital',
+        envioGratis: true 
+      };
+    }
+  }
+  
+  // PAGO EFECTIVO: Envío gratis >= $15,000, sino $2,000
+  if (metodoPago === 'efectivo') {
+    if (subtotal >= 15000) {
+      console.log('✅ Envío gratis - Efectivo >= $15,000');
+      return { 
+        costoEnvio: 0, 
+        mensaje: '🎉 Envío gratis - Pago efectivo',
+        envioGratis: true 
+      };
+    } else {
+      console.log('💰 Aplicando costo de envío: $2,000');
+      return { 
+        costoEnvio: 2000, 
+        mensaje: '🚚 Costo de envío',
+        envioGratis: false,
+        faltanteEnvioGratis: 15000 - subtotal // Para mostrar cuánto falta
+      };
+    }
+  }
+  
+  // Método no válido
+  return { 
+    error: 'Método de pago no válido',
+    codigo: 'METODO_INVALIDO'
+  };
+}
+
+
+
 // ===================
 // 💳 NUEVO SISTEMA WOMPI API DIRECTA
 // ===================
@@ -2255,6 +2367,8 @@ console.log('🔍 DEBUG CREAR-PAGO - datosEntrega extraído:', datosEntrega);
 console.log('🔍 DEBUG CREAR-PAGO - datosEntrega tipo:', typeof datosEntrega);
 console.log('🔍 DEBUG CREAR-PAGO - req.body.datosEntrega:', req.body.datosEntrega);
 console.log('🔍 DEBUG CREAR-PAGO - telefono extraído:', telefono);
+
+
     console.log(`💳 Creando pago ${metodoPago} por $${monto}`);
 
     const crypto = await import('crypto');
@@ -3848,10 +3962,12 @@ No entendí exactamente tu consulta, pero puedo ayudarte con:
 async function consultarPedidoWhatsApp(pedidoNumero, telefono) {
   try {
     const pedidoResult = await pool.query(`
-      SELECT p.*, u.nombre 
-      FROM pedidos p 
-      JOIN usuarios u ON p.usuario_id = u.id 
-      WHERE p.id = $1 AND (p.telefono_contacto = $2 OR u.telefono = $2)
+      SELECT 
+  p.*, u.nombre,
+  EXTRACT(EPOCH FROM (NOW() - p.fecha))/60 as minutos_transcurridos
+FROM pedidos p
+JOIN usuarios u ON p.usuario_id = u.id
+WHERE p.id = $1 AND (p.telefono_contacto = $2 OR u.telefono = $2)
     `, [pedidoNumero, telefono]);
 
     if (pedidoResult.rows.length === 0) {
@@ -3868,7 +3984,8 @@ async function consultarPedidoWhatsApp(pedidoNumero, telefono) {
     }
 
     const pedido = pedidoResult.rows[0];
-    const tiempoTranscurrido = Math.round((Date.now() - new Date(pedido.fecha).getTime()) / 60000);
+    // ✅ USAR LA MISMA LÓGICA QUE EN LA CONSULTA PRINCIPAL
+const tiempoTranscurrido = Math.round(pedido.minutos_transcurridos || 0);
     const direccion = pedido.torre_entrega ? 
       `Torre ${pedido.torre_entrega}, Piso ${pedido.piso_entrega}, Apt ${pedido.apartamento_entrega}` : 
       'Dirección por confirmar';
