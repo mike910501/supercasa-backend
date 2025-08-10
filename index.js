@@ -1390,71 +1390,117 @@ app.get('/admin/stats/residential', authenticateToken, requireAdmin, async (req,
 // 🚀 RUTAS PARA GESTIÓN DE PEDIDOS
 // ===================
 
-// 📦 Obtener todos los pedidos para gestión admin
+// 📦 Obtener todos los pedidos para gestión admin CON DESGLOSE DE ENVÍO
 app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { torre, estado } = req.query;
 
     let query = `
-      SELECT 
-        p.*,
+      SELECT
+        p.*, 
         u.nombre as usuario_nombre,
         u.email as usuario_email,
-        u.telefono
+        u.telefono as usuario_telefono,
+        CONCAT('Torre ', p.torre_entrega, ', Piso ', p.piso_entrega, ', Apt ', p.apartamento_entrega) as direccion_completa
       FROM pedidos p
-      JOIN usuarios u ON p.usuario_id = u.id
-      WHERE 1=1
+      LEFT JOIN usuarios u ON p.usuario_id = u.id
     `;
+
     const params = [];
 
     if (torre && ['1', '2', '3', '4', '5'].includes(torre)) {
-      query += ` AND p.torre_entrega = $${params.length + 1}`;
+      query += ` WHERE p.torre_entrega = $${params.length + 1}`;
       params.push(torre);
     }
 
-    if (estado) {
-      query += ` AND p.estado = $${params.length + 1}`;
+    if (estado && estado !== 'todos') {
+      const whereClause = params.length > 0 ? ' AND' : ' WHERE';
+      query += `${whereClause} p.estado = $${params.length + 1}`;
       params.push(estado);
     }
 
-    query += ` ORDER BY p.fecha DESC`;
-    
+    query += ' ORDER BY p.fecha DESC';
+
     const result = await pool.query(query, params);
+
+   // ✅ CALCULAR DESGLOSE DE ENVÍO PARA CADA PEDIDO
+const pedidosConDesglose = result.rows.map(pedido => {
+  const metodoPago = pedido.payment_reference ? 'digital' : 'efectivo';
+  
+  // Inicializar valores
+  let costoEnvio = null; // null = sin información de envío (pedidos antiguos)
+  let subtotal = pedido.total;
+  
+  // Solo aplicar lógica de envío a pedidos de HOY en adelante
+  const fechaPedido = new Date(pedido.fecha);
+  const fechaHoy = new Date('2025-08-10'); // Fecha de implementación
+  
+  if (fechaPedido >= fechaHoy) {
+    console.log(`🔍 Procesando pedido ${pedido.id}: Total=$${pedido.total}, Método=${metodoPago}`);
     
-    const pedidosFormateados = result.rows.map(pedido => ({
-      id: pedido.id,
-      numero_pedido: `SUP-${pedido.id.toString().padStart(3, '0')}`,
-      usuario: {
-        id: pedido.usuario_id,
-        nombre: pedido.usuario_nombre,
-        email: pedido.usuario_email,
-        telefono: pedido.telefono
-      },
-      productos: typeof pedido.productos === 'string' 
-        ? JSON.parse(pedido.productos) 
-        : pedido.productos,
-      total: parseFloat(pedido.total),
-      estado: pedido.estado,
-      fecha_pedido: pedido.fecha,
-      fecha_entrega: pedido.fecha_entrega,
-      torre_entrega: pedido.torre_entrega,
-      piso_entrega: pedido.piso_entrega,
-      apartamento_entrega: pedido.apartamento_entrega,
-      instrucciones_entrega: pedido.instrucciones_entrega,
-      horario_preferido: pedido.horario_preferido,
-      telefono_contacto: pedido.telefono_contacto,
-      payment_reference: pedido.payment_reference,
-      payment_status: pedido.payment_status,
-      payment_method: pedido.payment_method,
-      payment_transaction_id: pedido.payment_transaction_id,
-      payment_amount_cents: pedido.payment_amount_cents
-    }));
-    
-    res.json(pedidosFormateados);
-    
-  } catch (error) {
-    console.error('Error al obtener pedidos:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    if (metodoPago === 'efectivo') {
+      if (pedido.total >= 15000) {
+        costoEnvio = 0; // Envío gratis
+        subtotal = pedido.total;
+        console.log(`✅ Efectivo >= $15k: Envío GRATIS`);
+      } else if (pedido.total >= 5000) {
+        costoEnvio = 2000; // Envío pagado
+        subtotal = pedido.total - 2000;
+        console.log(`💰 Efectivo $5k-$14k: Envío $2,000`);
+      } else {
+        costoEnvio = null; // No válido
+        console.log(`❌ Efectivo < $5k: No válido`);
+      }
+    } else { // digital
+      if (pedido.total >= 20000) {
+        costoEnvio = 0; // Envío gratis
+        subtotal = pedido.total;
+        console.log(`✅ Digital >= $20k: Envío GRATIS`);
+      } else {
+        costoEnvio = null; // Digital no disponible para montos menores
+        console.log(`❌ Digital < $20k: No válido`);
+      }
+    }
+  } else {
+    console.log(`📅 Pedido ${pedido.id} es anterior a implementación: sin desglose`);
+  }
+  
+  return {
+    ...pedido,
+    productos: typeof pedido.productos === 'string' 
+      ? JSON.parse(pedido.productos)
+      : pedido.productos,
+    total: parseFloat(pedido.total),
+    subtotal: subtotal,
+    costo_envio: costoEnvio, // null, 0, o 2000
+    metodo_pago: metodoPago,
+    tiene_desglose: costoEnvio !== null, // Nuevo campo para saber si mostrar desglose
+    estado: pedido.estado,
+    fecha_pedido: pedido.fecha,
+    fecha_entrega: pedido.fecha_entrega,
+    torre_entrega: pedido.torre_entrega,
+    piso_entrega: pedido.piso_entrega,
+    apartamento_entrega: pedido.apartamento_entrega,
+    instrucciones_entrega: pedido.instrucciones_entrega,
+    horario_preferido: pedido.horario_preferido,
+    telefono_contacto: pedido.telefono_contacto,
+    payment_reference: pedido.payment_reference,
+    payment_status: pedido.payment_status,
+    payment_method: pedido.payment_method,
+    payment_transaction_id: pedido.payment_transaction_id,
+    payment_amount_cents: pedido.payment_amount_cents,
+    usuario: {
+      nombre: pedido.usuario_nombre,
+      email: pedido.usuario_email,
+      telefono: pedido.usuario_telefono
+    }
+  };
+});
+
+    res.json(pedidosConDesglose);
+  } catch (err) {
+    console.error('❌ Error obteniendo pedidos admin:', err);
+    res.status(500).json({ error: 'Error obteniendo pedidos' });
   }
 });
 
