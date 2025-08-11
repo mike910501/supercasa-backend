@@ -1423,95 +1423,92 @@ app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) 
 
     const result = await pool.query(query, params);
 
-    // ✅ CALCULAR DESGLOSE DE ENVÍO PARA CADA PEDIDO (CORREGIDO)
+// ✅ MAPEAR PEDIDOS TAL COMO VIENEN - SIN CALCULAR NADA
 const pedidosConDesglose = result.rows.map(pedido => {
   const metodoPago = pedido.payment_reference ? 'digital' : 'efectivo';
   
-  // El total en BD es SOLO productos, necesitamos AGREGAR envío
-  let costoEnvio = null;
-  let subtotal = pedido.total; // Productos
-  let totalConEnvio = pedido.total; // Total final
-  let tieneDesglose = false;
-  
-  
-  
-  // NUEVA LÓGICA: AGREGAR envío al total de productos
-  if (metodoPago === 'efectivo') {
-    if (pedido.total >= 15000) {
-      // Efectivo >= $15k → Envío gratis
-      costoEnvio = 0;
-      subtotal = pedido.total;
-      totalConEnvio = pedido.total + 0; // Sin envío
-      tieneDesglose = true;
-      
-    } else if (pedido.total >= 5000) {
-      // Efectivo >= $5k → Cobrar envío
-      costoEnvio = 2000;
-      subtotal = pedido.total;
-      totalConEnvio = pedido.total + 2000; // Con envío
-      tieneDesglose = true;
-      
-    } else {
-      // < $5k → Sin desglose
-      costoEnvio = null;
-      tieneDesglose = false;
-      
-    }
-  } else { // digital
-    if (pedido.total >= 20000) {
-      // Digital >= $20k → Envío gratis
-      costoEnvio = 0;
-      subtotal = pedido.total;
-      totalConEnvio = pedido.total + 0;
-      tieneDesglose = true;
-      
-    } else {
-      // Digital < $20k → Sin desglose
-      costoEnvio = null;
-      tieneDesglose = false;
-      
-    }
+  // Solo parsear productos, sin calcular
+  let productos = [];
+  try {
+    productos = typeof pedido.productos === 'string' 
+      ? JSON.parse(pedido.productos) 
+      : pedido.productos || [];
+  } catch (error) {
+    console.error('Error parsing productos:', error);
+    productos = [];
   }
   
   return {
-  ...pedido,
-  productos: typeof pedido.productos === 'string' 
-    ? JSON.parse(pedido.productos)
-    : pedido.productos,
-  total: parseFloat(totalConEnvio), // Total CON envío
-  subtotal: subtotal, // Solo productos
-  costo_envio: costoEnvio,
-  metodo_pago: metodoPago,
-  tiene_desglose: tieneDesglose,
-  estado: pedido.estado,
-  fecha_pedido: pedido.fecha,
-  fecha_entrega: pedido.fecha_entrega,
-  torre_entrega: pedido.torre_entrega,
-  piso_entrega: pedido.piso_entrega,
-  apartamento_entrega: pedido.apartamento_entrega,
-  instrucciones_entrega: pedido.instrucciones_entrega,
-  horario_preferido: pedido.horario_preferido,
-  telefono_contacto: pedido.telefono_contacto,
-  payment_reference: pedido.payment_reference,
-  payment_status: pedido.payment_status,
-  payment_method: pedido.payment_method,
-  payment_transaction_id: pedido.payment_transaction_id,
-  payment_amount_cents: pedido.payment_amount_cents,
-  usuario: {
-    nombre: pedido.usuario_nombre,
-    email: pedido.usuario_email,
-    telefono: pedido.usuario_telefono
-  }
-};
+    ...pedido,
+    productos: productos,
+    total: parseFloat(pedido.total), // TOTAL TAL COMO VIENE DEL CARRITO
+    metodo_pago: metodoPago,
+    codigo_promocional: null, // Se llenará abajo si existe
+    fecha_pedido: pedido.fecha,
+    fecha_entrega: pedido.fecha_entrega,
+    torre_entrega: pedido.torre_entrega,
+    piso_entrega: pedido.piso_entrega,
+    apartamento_entrega: pedido.apartamento_entrega,
+    instrucciones_entrega: pedido.instrucciones_entrega,
+    horario_preferido: pedido.horario_preferido,
+    telefono_contacto: pedido.telefono_contacto,
+    payment_reference: pedido.payment_reference,
+    payment_status: pedido.payment_status,
+    payment_method: pedido.payment_method,
+    payment_transaction_id: pedido.payment_transaction_id,
+    payment_amount_cents: pedido.payment_amount_cents,
+    usuario: {
+      nombre: pedido.usuario_nombre,
+      email: pedido.usuario_email,
+      telefono: pedido.usuario_telefono
+    }
+  };
 });
 
-    res.json(pedidosConDesglose);
+// ✅ SOLO OBTENER QUÉ CÓDIGO SE USÓ (SIN CALCULAR NADA)
+try {
+  const pedidoIds = pedidosConDesglose.map(p => p.id);
+  
+  if (pedidoIds.length > 0) {
+    const codigosResult = await pool.query(`
+      SELECT 
+        p.id as pedido_id,
+        cp.codigo,
+        cp.descuento_porcentaje
+      FROM pedidos p
+      LEFT JOIN codigos_promocionales cp ON cp.usuario_id = p.usuario_id 
+        AND cp.usado = TRUE 
+        AND cp.fecha_uso BETWEEN p.fecha - INTERVAL '2 hours' AND p.fecha + INTERVAL '1 hour'
+      WHERE p.id = ANY($1)
+      ORDER BY p.id, cp.fecha_uso DESC
+    `, [pedidoIds]);
+
+    // Solo asignar QUÉ código se usó, no calcular montos
+    const codigosPorPedido = {};
+    codigosResult.rows.forEach(row => {
+      if (row.codigo && !codigosPorPedido[row.pedido_id]) {
+        codigosPorPedido[row.pedido_id] = row.codigo;
+      }
+    });
+
+    // Asignar solo el nombre del código
+    pedidosConDesglose.forEach(pedido => {
+      const codigo = codigosPorPedido[pedido.id];
+      if (codigo) {
+        pedido.codigo_promocional = codigo;
+      }
+    });
+  }
+} catch (codigoError) {
+  console.error('Error obteniendo códigos promocionales:', codigoError);
+}
+
+res.json(pedidosConDesglose);
   } catch (err) {
     console.error('❌ Error obteniendo pedidos admin:', err);
     res.status(500).json({ error: 'Error obteniendo pedidos' });
   }
 });
-
 
 // 🔄 Actualizar estado del pedido + RESTAURAR STOCK
 app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async (req, res) => {
@@ -1540,8 +1537,6 @@ app.put('/api/admin/pedidos/:id/estado', authenticateToken, requireAdmin, async 
       [estado, fechaEntrega, id]
     );
 
- 
-    
     res.json({ 
       message: 'Estado actualizado correctamente',
       pedido: result.rows[0] 
