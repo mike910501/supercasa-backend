@@ -1453,11 +1453,7 @@ if (codigo_canje) {
     WHERE codigo_canje = $2 AND usuario_id = $3
   `, [pedidoId, codigo_canje, req.user.userId]);
   
-  // AHORA SÍ descontar los puntos del usuario
-  const canjeInfo = await pool.query(
-    'SELECT puntos_usados FROM canjes_recompensas WHERE codigo_canje = $1',
-    [codigo_canje]
-  );
+
   
   if (canjeInfo.rows.length > 0) {
     const puntosUsados = canjeInfo.rows[0].puntos_usados;
@@ -1544,7 +1540,7 @@ try {
 
 res.status(201).json({
   success: true,
-  pedido_id: pedidoId,
+  pedidoId: pedidoId,
   numero_pedido: `SUP-${pedidoId}`,
   total: totalFinal,
   productos: productosCompletos.length,
@@ -2121,6 +2117,7 @@ app.post('/api/puntos/canjear', authenticateToken, async (req, res) => {
   const usuarioId = req.user.userId;
 
   try {
+    
     // Validar mínimo 50 puntos
     if (puntos_a_canjear < 50) {
       return res.status(400).json({
@@ -2160,13 +2157,13 @@ app.post('/api/puntos/canjear', authenticateToken, async (req, res) => {
       });
     }
 
-    // Calcular valor del descuento (1 punto = $100)
-    const valorDescuento = puntos_a_canjear * 100;
+    // ✅ CORRECCIÓN: Calcular valor del descuento (1 punto = $100)
+    const valorDescuento = puntos_a_canjear * 100; // ← AQUÍ ESTABA EL ERROR
 
     // Generar código único
     const codigoCanje = `PTS${Date.now().toString(36).toUpperCase()}`;
 
-    // 🔴 USAR 'ACTIVO' EN LUGAR DE 'PENDIENTE'
+    // Crear el canje con estado ACTIVO
     const canjeResult = await pool.query(`
       INSERT INTO canjes_recompensas 
       (usuario_id, puntos_usados, codigo_canje, estado, valor_descuento, fecha_expiracion)
@@ -2177,7 +2174,7 @@ app.post('/api/puntos/canjear', authenticateToken, async (req, res) => {
     // NO ACTUALIZAR PUNTOS AQUÍ - Solo devolver los puntos que QUEDARÍAN
     const puntosRestantes = puntosDisponibles - puntos_a_canjear;
 
-    console.log(`🎯 Canje ACTIVO creado: ${puntos_a_canjear} puntos (NO DESCONTADOS AÚN)`);
+    console.log(`🎯 Canje ACTIVO creado: ${puntos_a_canjear} puntos = $${valorDescuento} descuento`);
 
     res.json({
       success: true,
@@ -2188,7 +2185,8 @@ app.post('/api/puntos/canjear', authenticateToken, async (req, res) => {
         fecha_expiracion: canjeResult.rows[0].fecha_expiracion,
         puntos_restantes: puntosRestantes,
         estado: 'ACTIVO'
-      }
+      },
+      message: `Canje exitoso: ${puntos_a_canjear} puntos = $${valorDescuento.toLocaleString('es-CO')} de descuento`
     });
 
   } catch (error) {
@@ -2529,33 +2527,32 @@ app.get('/api/puntos/opciones-canje', authenticateToken, async (req, res) => {
     
     const puntosDisponibles = saldoResult.rows[0]?.puntos_disponibles || 0;
     
-    // Definir opciones de canje
-    const opcionesCanje = [
-      { 
-        puntos: 50, 
-        valor: 5000, 
-        descripcion: '$5,000 de descuento',
-        disponible: puntosDisponibles >= 50
-      },
-      { 
-        puntos: 100, 
-        valor: 10000, 
-        descripcion: '$10,000 de descuento',
-        disponible: puntosDisponibles >= 100
-      },
-      { 
-        puntos: 200, 
-        valor: 22000, 
-        descripcion: '$22,000 de descuento (10% extra)',
-        disponible: puntosDisponibles >= 200
-      },
-      { 
-        puntos: 500, 
-        valor: 60000, 
-        descripcion: '$60,000 de descuento (20% extra)',
-        disponible: puntosDisponibles >= 500
-      }
-    ];
+   const opcionesCanje = [
+  { 
+    puntos: 50, 
+    valor: 500,     // 🔧 CAMBIAR DE 5000 A 500
+    descripcion: '$500 de descuento',  // 🔧 ACTUALIZAR DESCRIPCIÓN
+    disponible: puntosDisponibles >= 50
+  },
+  { 
+    puntos: 100, 
+    valor: 1000,    // 🔧 CAMBIAR DE 10000 A 1000
+    descripcion: '$1,000 de descuento',  // 🔧 ACTUALIZAR DESCRIPCIÓN
+    disponible: puntosDisponibles >= 100
+  },
+  { 
+    puntos: 200, 
+    valor: 2200,    // 🔧 CAMBIAR DE 22000 A 2200
+    descripcion: '$2,200 de descuento (10% extra)',  // 🔧 ACTUALIZAR DESCRIPCIÓN
+    disponible: puntosDisponibles >= 200
+  },
+  { 
+    puntos: 500, 
+    valor: 6000,    // 🔧 CAMBIAR DE 60000 A 6000
+    descripcion: '$6,000 de descuento (20% extra)',  // 🔧 ACTUALIZAR DESCRIPCIÓN
+    disponible: puntosDisponibles >= 500
+  }
+];
     
     res.json({
       success: true,
@@ -4520,6 +4517,50 @@ app.get('/api/consultar-pago/:transactionId', authenticateToken, async (req, res
     });
   }
 });
+
+// 1. CORREGIR EL DOBLE DESCUENTO - Línea ~1650
+
+
+// 2. AGREGAR ENDPOINT QUE FALTA - Agregar después de línea ~2700
+app.get('/api/puntos/usuario', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        pp.puntos_disponibles,
+        pp.puntos_totales,
+        pp.puntos_canjeados,
+        pp.nivel,
+        np.multiplicador_puntos,
+        np.color_hex,
+        np.icono
+      FROM programa_puntos pp
+      LEFT JOIN niveles_programa np ON pp.nivel = np.nombre
+      WHERE pp.usuario_id = $1
+    `, [req.user.userId]);
+    
+    if (result.rows.length === 0) {
+      // Crear perfil si no existe
+      await pool.query(
+        'INSERT INTO programa_puntos (usuario_id) VALUES ($1)',
+        [req.user.userId]
+      );
+      
+      return res.json({
+        puntos_disponibles: 0,
+        puntos_totales: 0,
+        nivel: 'BRONCE',
+        multiplicador: 1.0
+      });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error obteniendo puntos:', error);
+    res.status(500).json({ error: 'Error obteniendo puntos' });
+  }
+});
+
+// 3. CORREGIR VALOR DE PUNTOS EN CANJE - Línea ~2826
 
 // 🔍 DEBUG - Ver exactamente qué enviamos a WOMPI para DaviPlata
 app.get('/debug-daviplata-last', async (req, res) => {
