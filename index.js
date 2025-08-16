@@ -154,6 +154,184 @@ pool.query(`
 `).then(() => console.log("✅ Tabla 'codigos_promocionales' lista"))
   .catch(err => console.error("❌ Error creando tabla codigos_promocionales:", err));
 
+  // ========================================
+// 🏆 SISTEMA DE PUNTOS - CREAR TABLAS Y DATOS INICIALES
+// ========================================
+
+// 1. Tabla programa_puntos (si no existe)
+pool.query(`
+  CREATE TABLE IF NOT EXISTS programa_puntos (
+    id SERIAL PRIMARY KEY,
+    usuario_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
+    puntos_totales INTEGER DEFAULT 0,
+    puntos_disponibles INTEGER DEFAULT 0,
+    puntos_canjeados INTEGER DEFAULT 0,
+    puntos_expirados INTEGER DEFAULT 0,
+    nivel VARCHAR(20) DEFAULT 'BRONCE',
+    fecha_inicio TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ultima_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(usuario_id)
+  )
+`).then(() => console.log("✅ Tabla 'programa_puntos' lista"))
+  .catch(err => console.error("❌ Error creando tabla programa_puntos:", err));
+
+// 2. Tabla transacciones_puntos
+pool.query(`
+  CREATE TABLE IF NOT EXISTS transacciones_puntos (
+    id SERIAL PRIMARY KEY,
+    usuario_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
+    pedido_id INTEGER REFERENCES pedidos(id) ON DELETE SET NULL,
+    tipo VARCHAR(20) NOT NULL CHECK (tipo IN ('GANADO', 'CANJEADO', 'EXPIRADO', 'BONUS', 'AJUSTE')),
+    puntos INTEGER NOT NULL,
+    descripcion TEXT,
+    saldo_anterior INTEGER DEFAULT 0,
+    saldo_nuevo INTEGER DEFAULT 0,
+    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expira_en DATE,
+    expirado BOOLEAN DEFAULT FALSE
+  )
+`).then(() => console.log("✅ Tabla 'transacciones_puntos' lista"))
+  .catch(err => console.error("❌ Error creando tabla transacciones_puntos:", err));
+
+// 3. Tabla niveles_programa
+pool.query(`
+  CREATE TABLE IF NOT EXISTS niveles_programa (
+    id SERIAL PRIMARY KEY,
+    nombre VARCHAR(20) UNIQUE NOT NULL,
+    puntos_minimos INTEGER NOT NULL,
+    multiplicador_puntos DECIMAL(3,2) DEFAULT 1.00,
+    descuento_base INTEGER DEFAULT 0,
+    beneficios JSONB,
+    color_hex VARCHAR(7),
+    icono VARCHAR(50),
+    orden INTEGER
+  )
+`).then(async () => {
+  console.log("✅ Tabla 'niveles_programa' lista");
+
+  // Insertar niveles por defecto si no existen
+pool.query('SELECT COUNT(*) as total FROM niveles_programa')
+  .then(async (result) => {
+    if (parseInt(result.rows[0].total) === 0) {
+      await pool.query(`
+        INSERT INTO niveles_programa (nombre, puntos_minimos, multiplicador_puntos, color_hex, icono, orden)
+        VALUES 
+          ('BRONCE', 0, 1.0, '#CD7F32', '🥉', 1),
+          ('PLATA', 500, 1.2, '#C0C0C0', '🥈', 2),
+          ('ORO', 1500, 1.5, '#FFD700', '🥇', 3)
+      `);
+      console.log("✅ Niveles de programa insertados");
+    }
+  })
+  .catch(err => console.log("❌ Error con niveles:", err));
+
+// Insertar configuración de puntos si no existe
+pool.query(`
+  CREATE TABLE IF NOT EXISTS configuracion_puntos (
+    id SERIAL PRIMARY KEY,
+    clave VARCHAR(50) UNIQUE NOT NULL,
+    valor VARCHAR(100) NOT NULL,
+    descripcion TEXT
+  )
+`).then(async () => {
+  const configExistente = await pool.query('SELECT COUNT(*) as total FROM configuracion_puntos');
+  
+  if (parseInt(configExistente.rows[0].total) === 0) {
+    await pool.query(`
+      INSERT INTO configuracion_puntos (clave, valor, descripcion)
+      VALUES 
+        ('PUNTOS_POR_MIL_PESOS', '10', 'Puntos otorgados por cada $1000 gastados'),
+        ('MONTO_MINIMO_PUNTOS', '15000', 'Monto mínimo para ganar puntos'),
+        ('BONUS_COMPRA_GRANDE', '50', 'Puntos bonus por compras superiores a $50,000'),
+        ('DIAS_EXPIRACION', '365', 'Días antes de que expiren los puntos')
+    `);
+    console.log("✅ Configuración de puntos insertada");
+  }
+}).catch(err => console.error("❌ Error con configuracion_puntos:", err));
+  
+  // Insertar niveles por defecto
+  const nivelesExistentes = await pool.query('SELECT COUNT(*) as total FROM niveles_programa');
+  
+  if (parseInt(nivelesExistentes.rows[0].total) === 0) {
+    await pool.query(`
+      INSERT INTO niveles_programa (nombre, puntos_minimos, multiplicador_puntos, color_hex, icono, orden)
+      VALUES 
+        ('BRONCE', 0, 1.0, '#CD7F32', '🥉', 1),
+        ('PLATA', 500, 1.2, '#C0C0C0', '🥈', 2),
+        ('ORO', 1500, 1.5, '#FFD700', '🥇', 3)
+    `);
+    console.log("✅ Niveles de programa insertados");
+  }
+}).catch(err => console.error("❌ Error con niveles_programa:", err));
+
+// 4. Tabla configuracion_puntos
+pool.query(`
+  CREATE TABLE IF NOT EXISTS configuracion_puntos (
+    id SERIAL PRIMARY KEY,
+    clave VARCHAR(50) UNIQUE NOT NULL,
+    valor VARCHAR(100) NOT NULL,
+    descripcion TEXT
+  )
+`).then(async () => {
+  console.log("✅ Tabla 'configuracion_puntos' lista");
+  
+  // Insertar configuración por defecto
+  const configExistente = await pool.query('SELECT COUNT(*) as total FROM configuracion_puntos');
+  
+  if (parseInt(configExistente.rows[0].total) === 0) {
+    await pool.query(`
+      INSERT INTO configuracion_puntos (clave, valor, descripcion)
+      VALUES 
+        ('PUNTOS_POR_MIL_PESOS', '10', 'Puntos otorgados por cada $1000 gastados'),
+        ('MONTO_MINIMO_PUNTOS', '15000', 'Monto mínimo para ganar puntos'),
+        ('BONUS_COMPRA_GRANDE', '50', 'Puntos bonus por compras superiores a $50,000'),
+        ('DIAS_EXPIRACION', '365', 'Días antes de que expiren los puntos')
+    `);
+    console.log("✅ Configuración de puntos insertada");
+  }
+}).catch(err => console.error("❌ Error con configuracion_puntos:", err));
+
+// 5. Tabla recompensas
+pool.query(`
+  CREATE TABLE IF NOT EXISTS recompensas (
+    id SERIAL PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL,
+    descripcion TEXT,
+    puntos_requeridos INTEGER NOT NULL,
+    tipo VARCHAR(30) CHECK (tipo IN ('DESCUENTO_PORCENTAJE', 'DESCUENTO_MONTO', 'ENVIO_GRATIS', 'PRODUCTO_GRATIS')),
+    valor DECIMAL(10,2),
+    nivel_minimo VARCHAR(20) DEFAULT 'BRONCE',
+    categoria VARCHAR(50),
+    stock INTEGER,
+    stock_usado INTEGER DEFAULT 0,
+    validez_dias INTEGER DEFAULT 30,
+    activo BOOLEAN DEFAULT TRUE,
+    fecha_inicio TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    fecha_fin TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`).then(() => console.log("✅ Tabla 'recompensas' lista"))
+  .catch(err => console.error("❌ Error creando tabla recompensas:", err));
+
+// 6. Tabla canjes_recompensas
+pool.query(`
+  CREATE TABLE IF NOT EXISTS canjes_recompensas (
+    id SERIAL PRIMARY KEY,
+    usuario_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
+    recompensa_id INTEGER REFERENCES recompensas(id),
+    puntos_usados INTEGER NOT NULL,
+    codigo_canje VARCHAR(50) UNIQUE,
+    estado VARCHAR(20) DEFAULT 'ACTIVO' CHECK (estado IN ('ACTIVO', 'USADO', 'EXPIRADO')),
+    fecha_canje TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    fecha_uso TIMESTAMP,
+    fecha_expiracion TIMESTAMP,
+    pedido_id INTEGER REFERENCES pedidos(id),
+    valor_descuento DECIMAL(10,2),
+    notas TEXT
+  )
+`).then(() => console.log("✅ Tabla 'canjes_recompensas' lista"))
+  .catch(err => console.error("❌ Error creando tabla canjes_recompensas:", err));
+
 // Crear tabla promociones popup
 pool.query(`
   CREATE TABLE IF NOT EXISTS promociones_popup (
@@ -198,6 +376,153 @@ function validarDatosResidenciales(torre, piso, apartamento) {
   }
 
   return errores;
+}
+
+// ===================
+// 🏆 SISTEMA DE PUNTOS - FUNCIONES AUXILIARES
+// ===================
+
+// Calcular puntos para un pedido
+async function calcularPuntosParaPedido(pedido, usuarioId) {
+  try {
+    // Obtener configuración
+    const configResult = await pool.query(
+      "SELECT * FROM configuracion_puntos WHERE clave IN ('PUNTOS_POR_MIL_PESOS', 'BONUS_COMPRA_GRANDE', 'MONTO_MINIMO_PUNTOS')"
+    );
+    
+    const config = {};
+    configResult.rows.forEach(row => {
+      config[row.clave] = parseFloat(row.valor);
+    });
+    
+    // Verificar monto mínimo
+    if (pedido.total < (config.MONTO_MINIMO_PUNTOS || 15000)) {
+      console.log(`📊 Pedido ${pedido.id} no alcanza monto mínimo para puntos`);
+      return 0;
+    }
+    
+    // Obtener multiplicador del usuario
+    const nivelResult = await pool.query(`
+      SELECT np.multiplicador_puntos 
+      FROM programa_puntos pp
+      JOIN niveles_programa np ON pp.nivel = np.nombre
+      WHERE pp.usuario_id = $1
+    `, [usuarioId]);
+    
+    const multiplicador = nivelResult.rows[0]?.multiplicador_puntos || 1.0;
+    
+    // Calcular puntos base
+    const puntosPorMil = config.PUNTOS_POR_MIL_PESOS || 1;
+    const puntosBase = Math.floor(pedido.total / 1000) * puntosPorMil;
+    
+    // Aplicar multiplicador
+    let puntosTotales = Math.floor(puntosBase * multiplicador);
+    
+    // Bonus por compra grande
+    if (pedido.total >= 50000) {
+      puntosTotales += parseInt(config.BONUS_COMPRA_GRANDE || 50);
+    }
+    
+    console.log(`🎯 Puntos calculados para pedido ${pedido.id}: ${puntosTotales}`);
+    return puntosTotales;
+    
+  } catch (error) {
+    console.error('❌ Error calculando puntos:', error);
+    return 0;
+  }
+}
+
+// Asignar puntos a usuario
+async function asignarPuntosUsuario(usuarioId, pedidoId, puntos, descripcion = 'Compra en SuperCasa') {
+  try {
+    if (puntos <= 0) return false;
+    
+    // Verificar si el usuario tiene perfil de puntos
+    const perfilResult = await pool.query(
+      'SELECT * FROM programa_puntos WHERE usuario_id = $1',
+      [usuarioId]
+    );
+    
+    if (perfilResult.rows.length === 0) {
+      // Crear perfil de puntos si no existe
+      await pool.query(
+        'INSERT INTO programa_puntos (usuario_id) VALUES ($1)',
+        [usuarioId]
+      );
+    }
+    
+    // Obtener saldo actual
+    const saldoResult = await pool.query(
+      'SELECT puntos_disponibles, puntos_totales FROM programa_puntos WHERE usuario_id = $1',
+      [usuarioId]
+    );
+    
+    const saldoAnterior = saldoResult.rows[0]?.puntos_disponibles || 0;
+    const saldoNuevo = saldoAnterior + puntos;
+    
+    // Registrar transacción
+    const fechaExpiracion = new Date();
+    fechaExpiracion.setFullYear(fechaExpiracion.getFullYear() + 1);
+    
+    await pool.query(`
+      INSERT INTO transacciones_puntos 
+      (usuario_id, pedido_id, tipo, puntos, descripcion, saldo_anterior, saldo_nuevo, expira_en)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `, [usuarioId, pedidoId, 'GANADO', puntos, descripcion, saldoAnterior, saldoNuevo, fechaExpiracion]);
+    
+    // Actualizar saldo en programa_puntos
+    await pool.query(`
+      UPDATE programa_puntos 
+      SET puntos_disponibles = puntos_disponibles + $1,
+          puntos_totales = puntos_totales + $1,
+          ultima_actualizacion = CURRENT_TIMESTAMP
+      WHERE usuario_id = $2
+    `, [puntos, usuarioId]);
+    
+    // Verificar y actualizar nivel
+    await actualizarNivelUsuario(usuarioId);
+    
+    console.log(`✅ ${puntos} puntos asignados a usuario ${usuarioId}`);
+    return true;
+    
+  } catch (error) {
+    console.error('❌ Error asignando puntos:', error);
+    return false;
+  }
+}
+
+// Actualizar nivel del usuario
+async function actualizarNivelUsuario(usuarioId) {
+  try {
+    const puntosResult = await pool.query(
+      'SELECT puntos_totales FROM programa_puntos WHERE usuario_id = $1',
+      [usuarioId]
+    );
+    
+    const puntosTotales = puntosResult.rows[0]?.puntos_totales || 0;
+    
+    // Obtener nuevo nivel
+    const nivelResult = await pool.query(`
+      SELECT nombre FROM niveles_programa 
+      WHERE puntos_minimos <= $1 
+      ORDER BY puntos_minimos DESC 
+      LIMIT 1
+    `, [puntosTotales]);
+    
+    const nuevoNivel = nivelResult.rows[0]?.nombre || 'BRONCE';
+    
+    // Actualizar si cambió
+    await pool.query(
+      'UPDATE programa_puntos SET nivel = $1 WHERE usuario_id = $2',
+      [nuevoNivel, usuarioId]
+    );
+    
+    return nuevoNivel;
+    
+  } catch (error) {
+    console.error('❌ Error actualizando nivel:', error);
+    return null;
+  }
 }
 
 // 🛡️ Middleware de autenticación con mensajes amigables
@@ -857,6 +1182,7 @@ app.post('/orders', authenticateToken, async (req, res) => {
     paquetes = [], // NUEVO: Array de paquetes
     total,
     codigo_promocional,
+    codigo_canje,
     torre_entrega,
     piso_entrega,
     apartamento_entrega,
@@ -867,6 +1193,7 @@ app.post('/orders', authenticateToken, async (req, res) => {
     payment_method,
     payment_transaction_id,
     payment_amount_cents
+    
   } = req.body;
 
   try {
@@ -901,6 +1228,54 @@ app.post('/orders', authenticateToken, async (req, res) => {
         console.log(`✅ Descuento aplicado: ${descuento}% = $${descuentoMonto}`);
       }
     }
+
+    // 🎁 SISTEMA DE PUNTOS - Aplicar canje si existe
+let canjeAplicado = null; // Variable para guardar el canje aplicado
+if (req.body.codigo_canje) {
+  console.log(`🎁 Aplicando canje de puntos: ${req.body.codigo_canje}`);
+  
+  const canjeResult = await pool.query(`
+    SELECT 
+      cr.*, 
+      r.tipo, 
+      r.valor,
+      r.nombre as recompensa_nombre
+    FROM canjes_recompensas cr
+    JOIN recompensas r ON cr.recompensa_id = r.id
+    WHERE cr.codigo_canje = $1 
+    AND cr.usuario_id = $2 
+    AND cr.estado = 'ACTIVO'
+    AND (cr.fecha_expiracion IS NULL OR cr.fecha_expiracion > NOW())
+  `, [req.body.codigo_canje.trim(), req.user.userId]);
+  
+  if (canjeResult.rows.length > 0) {
+    const canje = canjeResult.rows[0];
+    canjeAplicado = canje; // Guardar para usar después
+    
+    // Aplicar descuento según tipo
+    if (canje.tipo === 'DESCUENTO_PORCENTAJE') {
+      const descuentoMonto = Math.round(totalFinal * (canje.valor / 100));
+      totalFinal = totalFinal - descuentoMonto;
+      console.log(`✅ Descuento por puntos aplicado: ${canje.valor}% = $${descuentoMonto}`);
+      
+    } else if (canje.tipo === 'DESCUENTO_MONTO') {
+      const descuentoAplicar = Math.min(canje.valor, totalFinal); // No dejar total negativo
+      totalFinal = totalFinal - descuentoAplicar;
+      console.log(`✅ Descuento por puntos aplicado: $${descuentoAplicar}`);
+      
+    } else if (canje.tipo === 'ENVIO_GRATIS') {
+      // Si tienes costo de envío en el total, restarlo aquí
+      console.log(`✅ Envío gratis aplicado por canje de puntos`);
+      // totalFinal = totalFinal - costoEnvio; // Si manejas envío separado
+      
+    } else if (canje.tipo === 'PRODUCTO_GRATIS') {
+      // Lógica para producto gratis (si lo implementas)
+      console.log(`✅ Producto gratis por canje: ${canje.recompensa_nombre}`);
+    }
+  } else {
+    console.log(`⚠️ Código de canje no válido o expirado: ${req.body.codigo_canje}`);
+  }
+}
 
     // ✅ VERIFICAR STOCK (productos individuales + paquetes)
     console.log('🔍 Verificando stock de productos y paquetes...');
@@ -1066,7 +1441,84 @@ app.post('/orders', authenticateToken, async (req, res) => {
     }
 
 const pedidoId = result.rows[0].id;
+
+// 🎯 APLICAR CANJE DE PUNTOS SI EXISTE
+if (codigo_canje) {
+  // Primero marcar el canje como USADO
+  await pool.query(`
+    UPDATE canjes_recompensas 
+    SET estado = 'USADO', 
+        fecha_uso = CURRENT_TIMESTAMP,
+        pedido_id = $1
+    WHERE codigo_canje = $2 AND usuario_id = $3
+  `, [pedidoId, codigo_canje, req.user.userId]);
+  
+  // AHORA SÍ descontar los puntos del usuario
+  const canjeInfo = await pool.query(
+    'SELECT puntos_usados FROM canjes_recompensas WHERE codigo_canje = $1',
+    [codigo_canje]
+  );
+  
+  if (canjeInfo.rows.length > 0) {
+    const puntosUsados = canjeInfo.rows[0].puntos_usados;
+    
+    await pool.query(`
+      UPDATE programa_puntos 
+      SET puntos_disponibles = puntos_disponibles - $1,
+          puntos_canjeados = puntos_canjeados + $1,
+          ultima_actualizacion = CURRENT_TIMESTAMP
+      WHERE usuario_id = $2
+    `, [puntosUsados, req.user.userId]);
+    
+    // Registrar transacción de puntos
+    await pool.query(`
+      INSERT INTO transacciones_puntos 
+      (usuario_id, tipo, puntos, descripcion, pedido_id)
+      VALUES ($1, 'CANJEADO', $2, $3, $4)
+    `, [
+      req.user.userId,
+      -puntosUsados,
+      `Canje aplicado en pedido SUP-${pedidoId}`,
+      pedidoId
+    ]);
+    
+    console.log(`✅ Canje ${codigo_canje} aplicado y ${puntosUsados} puntos descontados`);
+  }
+}
+// Marcar canje de puntos como usado si se aplicó
+if (req.body.codigo_canje) {
+  await pool.query(`
+    UPDATE canjes_recompensas 
+    SET estado = 'USADO', 
+        fecha_uso = CURRENT_TIMESTAMP,
+        pedido_id = $1
+    WHERE codigo_canje = $2 AND usuario_id = $3
+  `, [pedidoId, req.body.codigo_canje, req.user.userId]);
+  
+  console.log(`🎁 Canje ${req.body.codigo_canje} marcado como usado`);
+}
 console.log(`✅ Pedido creado: SUP-${pedidoId} con productos y paquetes`);
+
+// 🏆 SISTEMA DE PUNTOS - Calcular y asignar puntos
+try {
+  const puntosGanados = await calcularPuntosParaPedido(
+    { id: pedidoId, total: totalFinal },
+    req.user.userId
+  );
+  
+  if (puntosGanados > 0) {
+    await asignarPuntosUsuario(
+      req.user.userId,
+      pedidoId,
+      puntosGanados,
+      `Compra #SUP-${pedidoId}`
+    );
+    console.log(`🏆 ${puntosGanados} puntos asignados por pedido SUP-${pedidoId}`);
+  }
+} catch (puntosError) {
+  console.error('❌ Error en sistema de puntos (no crítico):', puntosError);
+  // No interrumpir el pedido si falla el sistema de puntos
+}
 
 // ✅ ENVIAR CONFIRMACIÓN WHATSAPP
 console.log('📱 Preparando confirmación WhatsApp...');
@@ -1105,7 +1557,1206 @@ res.status(201).json({
   }
 });
 
+// ===================
+// 💰 SISTEMA DE MÁRGENES Y COSTOS - SUPERCASA
+// ===================
 
+// 📊 Dashboard de rentabilidad con RANGOS DE TIEMPO
+app.get('/api/admin/rentabilidad/dashboard', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    // 📅 OBTENER PARÁMETROS DE FECHA
+    const { periodo = 'mes', fechaInicio, fechaFin } = req.query;
+    
+    let whereClause = '';
+    let whereParams = [];
+    let periodoTexto = '';
+    
+    // Configurar el filtro según el período seleccionado
+    switch(periodo) {
+      case '24h':
+        whereClause = "fecha >= NOW() - INTERVAL '24 hours'";
+        periodoTexto = 'Últimas 24 horas';
+        break;
+      
+      case 'semana':
+        whereClause = "fecha >= NOW() - INTERVAL '7 days'";
+        periodoTexto = 'Última semana';
+        break;
+      
+      case 'mes':
+        whereClause = "DATE_TRUNC('month', fecha) = DATE_TRUNC('month', CURRENT_DATE)";
+        periodoTexto = 'Mes actual';
+        break;
+      
+      case 'mesAnterior':
+        whereClause = "DATE_TRUNC('month', fecha) = DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')";
+        periodoTexto = 'Mes anterior';
+        break;
+      
+      case 'personalizado':
+        if (fechaInicio && fechaFin) {
+          whereClause = "fecha >= $1 AND fecha <= $2";
+          whereParams = [fechaInicio, fechaFin + ' 23:59:59'];
+          periodoTexto = `Del ${fechaInicio} al ${fechaFin}`;
+        } else {
+          whereClause = "DATE_TRUNC('month', fecha) = DATE_TRUNC('month', CURRENT_DATE)";
+          periodoTexto = 'Mes actual (fechas no válidas)';
+        }
+        break;
+      
+      case 'año':
+        whereClause = "DATE_TRUNC('year', fecha) = DATE_TRUNC('year', CURRENT_DATE)";
+        periodoTexto = 'Año actual';
+        break;
+      
+      default:
+        whereClause = "DATE_TRUNC('month', fecha) = DATE_TRUNC('month', CURRENT_DATE)";
+        periodoTexto = 'Mes actual';
+    }
+    
+    console.log(`📊 Obteniendo rentabilidad: ${periodoTexto}`);
+    
+    // Obtener ventas del día (siempre muestra hoy)
+    const ventasHoy = await pool.query(`
+      SELECT 
+        COUNT(*) as total_pedidos,
+        COALESCE(SUM(total), 0) as ventas_total,
+        COALESCE(AVG(total), 0) as ticket_promedio
+      FROM pedidos 
+      WHERE DATE(fecha) = CURRENT_DATE 
+      AND estado != 'cancelado'
+    `);
+
+    // Obtener ventas del PERÍODO SELECCIONADO
+    const queryVentasPeriodo = `
+      SELECT 
+        COUNT(*) as total_pedidos,
+        COALESCE(SUM(total), 0) as ventas_total,
+        COALESCE(AVG(total), 0) as ticket_promedio,
+        MIN(fecha) as fecha_inicio,
+        MAX(fecha) as fecha_fin
+      FROM pedidos 
+      WHERE ${whereClause}
+      AND estado != 'cancelado'
+    `;
+    
+    const ventasPeriodo = await pool.query(queryVentasPeriodo, whereParams);
+
+    // Obtener gastos operativos (prorrateados según el período)
+    const gastos = await pool.query(`
+      SELECT 
+        tipo,
+        COALESCE(SUM(monto), 0) as total_gastos
+      FROM gastos_operativos 
+      WHERE activo = TRUE
+      GROUP BY tipo
+    `);
+
+    // CALCULAR FACTOR DE PRORRATEO PARA GASTOS
+    let factorProrrateo = 1;
+    switch(periodo) {
+      case '24h':
+        factorProrrateo = 1/30; // 1 día de 30
+        break;
+      case 'semana':
+        factorProrrateo = 7/30; // 7 días de 30
+        break;
+      case 'mes':
+      case 'mesAnterior':
+        factorProrrateo = 1; // Mes completo
+        break;
+      case 'año':
+        factorProrrateo = 12; // 12 meses
+        break;
+      case 'personalizado':
+        if (fechaInicio && fechaFin) {
+          const dias = Math.ceil((new Date(fechaFin) - new Date(fechaInicio)) / (1000 * 60 * 60 * 24)) + 1;
+          factorProrrateo = dias / 30;
+        }
+        break;
+    }
+
+    // 🎯 CALCULAR MARGEN PROMEDIO REAL
+    const margenPromedio = await pool.query(`
+      SELECT 
+        AVG((precio - costo_compra)::DECIMAL / precio * 100) as margen_promedio,
+        COUNT(*) as productos_con_costo
+      FROM productos
+      WHERE costo_compra IS NOT NULL 
+      AND costo_compra > 0 
+      AND precio > 0
+    `);
+
+    const margenPromedioReal = parseFloat(margenPromedio.rows[0]?.margen_promedio || 30);
+    const productosConCosto = parseInt(margenPromedio.rows[0]?.productos_con_costo || 0);
+
+    // 🎯 CALCULAR COSTO REAL DE PRODUCTOS VENDIDOS EN EL PERÍODO
+    const queryCostosReales = `
+      WITH ventas_periodo AS (
+        SELECT 
+          jsonb_array_elements(productos::jsonb) as producto
+        FROM pedidos
+        WHERE ${whereClause}
+        AND estado != 'cancelado'
+      ),
+      productos_vendidos AS (
+        SELECT 
+          (producto->>'id')::INTEGER as producto_id,
+          (producto->>'nombre')::TEXT as nombre,
+          (producto->>'precio')::NUMERIC as precio_venta,
+          (producto->>'cantidad')::INTEGER as cantidad
+        FROM ventas_periodo
+      )
+      SELECT 
+        SUM(
+          CASE 
+            WHEN p.costo_compra IS NOT NULL AND p.costo_compra > 0 
+            THEN p.costo_compra * pv.cantidad
+            ELSE pv.precio_venta * pv.cantidad * (1 - ${margenPromedioReal/100})
+          END
+        ) as costo_total,
+        SUM(pv.precio_venta * pv.cantidad) as venta_total,
+        COUNT(DISTINCT pv.producto_id) as productos_diferentes,
+        SUM(pv.cantidad) as unidades_vendidas
+      FROM productos_vendidos pv
+      LEFT JOIN productos p ON p.id = pv.producto_id
+    `;
+
+    const costosReales = await pool.query(queryCostosReales, whereParams);
+    const datosVentas = costosReales.rows[0];
+    const costoTotalProductos = parseInt(datosVentas?.costo_total || 0);
+    
+    // Productos con margen bajo
+    const productosAlerta = await pool.query(`
+      SELECT 
+        id,
+        nombre, 
+        precio, 
+        costo_compra,
+        stock,
+        CASE 
+          WHEN costo_compra IS NOT NULL AND costo_compra > 0 
+          THEN ROUND(((precio - costo_compra)::DECIMAL / precio) * 100, 2)
+          ELSE NULL
+        END as margen_porcentaje,
+        CASE
+          WHEN costo_compra IS NULL THEN 'sin_costo'
+          WHEN precio <= costo_compra THEN 'perdida'
+          WHEN ((precio - costo_compra)::DECIMAL / precio) < 0.15 THEN 'margen_bajo'
+          ELSE 'ok'
+        END as estado
+      FROM productos
+      WHERE (costo_compra IS NOT NULL AND precio <= costo_compra) 
+         OR (costo_compra IS NOT NULL AND ((precio - costo_compra)::DECIMAL / precio) < 0.15)
+      ORDER BY 
+        CASE 
+          WHEN precio <= costo_compra THEN 0
+          ELSE 1
+        END,
+        nombre
+      LIMIT 10
+    `);
+
+    // Calcular totales con prorrateo
+    const totalGastosFijos = parseInt(gastos.rows.find(g => g.tipo === 'fijo')?.total_gastos || 0);
+    const totalGastosVariables = parseInt(gastos.rows.find(g => g.tipo === 'variable')?.total_gastos || 0);
+    const gastosOriginales = totalGastosFijos + totalGastosVariables;
+    const totalGastos = Math.round(gastosOriginales * factorProrrateo);
+    
+    // Ventas y cálculos finales
+    const ventasPeriodoTotal = parseInt(ventasPeriodo.rows[0].ventas_total || 0);
+    const costoFinal = costoTotalProductos > 0 ? costoTotalProductos : Math.round(ventasPeriodoTotal * (1 - margenPromedioReal/100));
+    
+    // CÁLCULOS FINALES
+    const utilidadBruta = ventasPeriodoTotal - costoFinal;
+    const utilidadNeta = utilidadBruta - totalGastos;
+    const margenBrutoReal = ventasPeriodoTotal > 0 ? ((utilidadBruta / ventasPeriodoTotal) * 100) : 0;
+    const margenNeto = ventasPeriodoTotal > 0 ? ((utilidadNeta / ventasPeriodoTotal) * 100) : 0;
+
+    console.log(`
+    =====================================
+    📊 RENTABILIDAD: ${periodoTexto}
+    =====================================
+    Ventas período:        $${ventasPeriodoTotal.toLocaleString()}
+    Costo de productos:    $${costoFinal.toLocaleString()}
+    Margen bruto:          ${margenBrutoReal.toFixed(2)}%
+    Utilidad bruta:        $${utilidadBruta.toLocaleString()}
+    -------------------------------------
+    Gastos (prorrateados): $${totalGastos.toLocaleString()}
+      - Base mensual:      $${gastosOriginales.toLocaleString()}
+      - Factor:            ${factorProrrateo.toFixed(2)}
+    -------------------------------------
+    UTILIDAD NETA:         $${utilidadNeta.toLocaleString()}
+    MARGEN NETO:           ${margenNeto.toFixed(2)}%
+    =====================================
+    `);
+
+    res.json({
+      periodo: periodoTexto,
+      fechaInicio: ventasPeriodo.rows[0].fecha_inicio,
+      fechaFin: ventasPeriodo.rows[0].fecha_fin,
+      ventasHoy: {
+        pedidos: parseInt(ventasHoy.rows[0].total_pedidos),
+        total: parseInt(ventasHoy.rows[0].ventas_total),
+        ticketPromedio: parseInt(ventasHoy.rows[0].ticket_promedio)
+      },
+      ventasPeriodo: {
+        pedidos: parseInt(ventasPeriodo.rows[0].total_pedidos),
+        total: ventasPeriodoTotal,
+        ticketPromedio: parseInt(ventasPeriodo.rows[0].ticket_promedio)
+      },
+      gastos: {
+        fijos: Math.round(totalGastosFijos * factorProrrateo),
+        variables: Math.round(totalGastosVariables * factorProrrateo),
+        total: totalGastos,
+        factorProrrateo: factorProrrateo,
+        gastosMensuales: gastosOriginales
+      },
+      margenes: {
+        utilidadBruta: utilidadBruta,
+        utilidadNeta: utilidadNeta,
+        margenBruto: parseFloat(margenBrutoReal.toFixed(2)),
+        margenNeto: parseFloat(margenNeto.toFixed(2)),
+        margenPromedio: parseFloat(margenPromedioReal.toFixed(2))
+      },
+      alertas: productosAlerta.rows,
+      analisis: {
+        productosConCosto: productosConCosto,
+        costoCalculado: costoFinal,
+        metodoCalculo: productosConCosto > 0 ? 'Basado en productos con costo real' : 'Estimación estándar',
+        unidadesVendidas: parseInt(datosVentas?.unidades_vendidas || 0),
+        productosDiferentes: parseInt(datosVentas?.productos_diferentes || 0)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error dashboard rentabilidad:', error);
+    res.status(500).json({ error: 'Error obteniendo dashboard de rentabilidad' });
+  }
+});
+
+// 💵 Actualizar costo de un producto
+app.put('/api/admin/productos/:id/costo', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { costo_compra, margen_objetivo } = req.body;
+    
+    console.log(`💰 Actualizando costo producto ${id}: $${costo_compra}, margen objetivo: ${margen_objetivo}%`);
+    
+    // Validar datos
+    if (costo_compra < 0) {
+      return res.status(400).json({ error: 'El costo no puede ser negativo' });
+    }
+
+    // Calcular precio sugerido basado en margen objetivo
+    let precioSugerido = null;
+    let categoriaMargen = null;
+    
+    if (costo_compra > 0 && margen_objetivo > 0) {
+      precioSugerido = Math.round(costo_compra / (1 - margen_objetivo / 100));
+      
+      // Determinar categoría
+      if (margen_objetivo >= 35) categoriaMargen = 'alto';
+      else if (margen_objetivo >= 20) categoriaMargen = 'medio';
+      else categoriaMargen = 'bajo';
+    }
+
+    // Actualizar producto
+    const result = await pool.query(`
+      UPDATE productos 
+      SET 
+        costo_compra = $1,
+        margen_objetivo = $2,
+        categoria_margen = $3
+      WHERE id = $4
+      RETURNING *,
+        CASE 
+          WHEN $1 > 0 AND precio > 0 
+          THEN ROUND(((precio - $1)::DECIMAL / precio) * 100, 2)
+          ELSE NULL
+        END as margen_actual
+    `, [
+      costo_compra || null,
+      margen_objetivo || null,
+      categoriaMargen,
+      id
+    ]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Producto no encontrado' });
+    }
+
+    const producto = result.rows[0];
+    console.log(`✅ Costo actualizado - Margen actual: ${producto.margen_actual}%`);
+
+    res.json({
+      success: true,
+      producto: producto,
+      precioSugerido: precioSugerido,
+      analisis: {
+        margenActual: producto.margen_actual,
+        estado: producto.margen_actual < 15 ? 'margen_bajo' : 
+                producto.margen_actual < 0 ? 'perdida' : 'ok'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error actualizando costo:', error);
+    res.status(500).json({ error: 'Error actualizando costo del producto' });
+  }
+});
+
+// 📊 Obtener todos los productos con análisis de márgenes
+app.get('/api/admin/productos/margenes', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    console.log('📊 Obteniendo análisis de márgenes...');
+    
+    const result = await pool.query(`
+      SELECT 
+        id,
+        nombre,
+        categoria,
+        precio,
+        costo_compra,
+        stock,
+        codigo,
+        CASE 
+          WHEN costo_compra IS NOT NULL AND costo_compra > 0 AND precio > 0
+          THEN ROUND(((precio - costo_compra)::DECIMAL / precio) * 100, 2)
+          ELSE NULL
+        END as margen_actual,
+        margen_objetivo,
+        categoria_margen,
+        CASE
+          WHEN costo_compra IS NULL THEN 'sin_costo'
+          WHEN costo_compra = 0 THEN 'sin_costo'
+          WHEN precio <= costo_compra THEN 'perdida'
+          WHEN ((precio - costo_compra)::DECIMAL / precio) < 0.15 THEN 'margen_bajo'
+          WHEN ((precio - costo_compra)::DECIMAL / precio) >= 0.35 THEN 'margen_alto'
+          ELSE 'margen_normal'
+        END as estado_margen,
+        CASE 
+          WHEN costo_compra IS NOT NULL AND costo_compra > 0
+          THEN precio - costo_compra
+          ELSE NULL
+        END as utilidad_unitaria
+      FROM productos
+      ORDER BY 
+        CASE 
+          WHEN costo_compra IS NULL OR costo_compra = 0 THEN 0
+          WHEN precio <= costo_compra THEN 1
+          WHEN ((precio - costo_compra)::DECIMAL / precio) < 0.15 THEN 2
+          ELSE 3
+        END,
+        nombre
+    `);
+
+    // Estadísticas generales
+    const stats = {
+      total: result.rows.length,
+      sinCosto: result.rows.filter(p => p.estado_margen === 'sin_costo').length,
+      perdida: result.rows.filter(p => p.estado_margen === 'perdida').length,
+      margenBajo: result.rows.filter(p => p.estado_margen === 'margen_bajo').length,
+      margenNormal: result.rows.filter(p => p.estado_margen === 'margen_normal').length,
+      margenAlto: result.rows.filter(p => p.estado_margen === 'margen_alto').length
+    };
+
+    console.log(`✅ Análisis completado: ${stats.total} productos, ${stats.perdida} en pérdida`);
+
+    res.json({
+      productos: result.rows,
+      estadisticas: stats
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo márgenes:', error);
+    res.status(500).json({ error: 'Error obteniendo análisis de márgenes' });
+  }
+});
+
+// 💰 Gestión de gastos operativos
+app.get('/api/admin/gastos', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT * FROM gastos_operativos 
+      WHERE activo = TRUE 
+      ORDER BY tipo, concepto
+    `);
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error('❌ Error obteniendo gastos:', error);
+    res.status(500).json({ error: 'Error obteniendo gastos operativos' });
+  }
+});
+
+// Agregar nuevo gasto
+app.post('/api/admin/gastos', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { concepto, monto, tipo, frecuencia, porcentaje, notas } = req.body;
+    
+    if (!concepto || !tipo) {
+      return res.status(400).json({ error: 'Concepto y tipo son requeridos' });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO gastos_operativos (concepto, monto, tipo, frecuencia, porcentaje, notas)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [concepto, monto || 0, tipo, frecuencia || 'mensual', porcentaje, notas]);
+
+    console.log(`✅ Gasto agregado: ${concepto}`);
+    res.json({ success: true, gasto: result.rows[0] });
+
+  } catch (error) {
+    console.error('❌ Error agregando gasto:', error);
+    res.status(500).json({ error: 'Error agregando gasto operativo' });
+  }
+});
+
+// Actualizar gasto
+app.put('/api/admin/gastos/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { concepto, monto, tipo, frecuencia, porcentaje, notas, activo } = req.body;
+
+    const result = await pool.query(`
+      UPDATE gastos_operativos 
+      SET concepto = $1, monto = $2, tipo = $3, frecuencia = $4, 
+          porcentaje = $5, notas = $6, activo = $7
+      WHERE id = $8
+      RETURNING *
+    `, [concepto, monto, tipo, frecuencia, porcentaje, notas, activo, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Gasto no encontrado' });
+    }
+
+    console.log(`✅ Gasto actualizado: ${concepto}`);
+    res.json({ success: true, gasto: result.rows[0] });
+
+  } catch (error) {
+    console.error('❌ Error actualizando gasto:', error);
+    res.status(500).json({ error: 'Error actualizando gasto operativo' });
+  }
+});
+
+// Eliminar gasto operativo
+app.delete('/api/admin/gastos/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const result = await pool.query(
+      'DELETE FROM gastos_operativos WHERE id = $1 RETURNING *',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Gasto no encontrado' });
+    }
+
+    console.log(`✅ Gasto eliminado: ${result.rows[0].concepto}`);
+    res.json({ success: true, message: 'Gasto eliminado exitosamente' });
+
+  } catch (error) {
+    console.error('❌ Error eliminando gasto:', error);
+    res.status(500).json({ error: 'Error eliminando gasto operativo' });
+  }
+});
+
+// ✅ FIN DEL SISTEMA DE MÁRGENES
+
+// ===================
+// 🏆 SISTEMA DE PUNTOS Y FIDELIZACIÓN - SUPERCASA
+// ===================
+
+// 📊 Obtener mi saldo de puntos
+app.get('/api/puntos/mi-saldo', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        pp.puntos_disponibles,
+        pp.puntos_totales,
+        pp.puntos_canjeados,
+        pp.nivel,
+        np.multiplicador_puntos,
+        np.color_hex,
+        np.icono,
+        np.beneficios,
+        (SELECT puntos_minimos FROM niveles_programa WHERE orden = np.orden + 1) as puntos_siguiente_nivel
+      FROM programa_puntos pp
+      JOIN niveles_programa np ON pp.nivel = np.nombre
+      WHERE pp.usuario_id = $1
+    `, [req.user.userId]);
+    
+    if (result.rows.length === 0) {
+      // Crear perfil si no existe
+      await pool.query(
+        'INSERT INTO programa_puntos (usuario_id) VALUES ($1)',
+        [req.user.userId]
+      );
+      
+      return res.json({
+        puntos_disponibles: 0,
+        puntos_totales: 0,
+        puntos_canjeados: 0,
+        nivel: 'BRONCE',
+        multiplicador: 1.0,
+        color_hex: '#CD7F32',
+        icono: '🥉'
+      });
+    }
+    
+    res.json(result.rows[0]);
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo saldo de puntos:', error);
+    res.status(500).json({ error: 'Error obteniendo saldo de puntos' });
+  }
+});
+
+// 🎯 ENDPOINT: Canjear puntos por descuento (VERSIÓN CORREGIDA)
+app.post('/api/puntos/canjear', authenticateToken, async (req, res) => {
+  const { puntos_a_canjear } = req.body;
+  const usuarioId = req.user.userId;
+
+  try {
+    // Validar mínimo 50 puntos
+    if (puntos_a_canjear < 50) {
+      return res.status(400).json({
+        success: false,
+        message: 'Mínimo 50 puntos para canjear'
+      });
+    }
+
+    // Validar múltiplos de 10
+    if (puntos_a_canjear % 10 !== 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Solo puedes canjear múltiplos de 10 puntos'
+      });
+    }
+
+    // Obtener saldo actual
+    const saldoResult = await pool.query(
+      'SELECT puntos_disponibles FROM programa_puntos WHERE usuario_id = $1',
+      [usuarioId]
+    );
+
+    if (!saldoResult.rows[0]) {
+      return res.status(404).json({
+        success: false,
+        message: 'No tienes un programa de puntos activo'
+      });
+    }
+
+    const puntosDisponibles = saldoResult.rows[0].puntos_disponibles;
+
+    // Validar saldo suficiente
+    if (puntosDisponibles < puntos_a_canjear) {
+      return res.status(400).json({
+        success: false,
+        message: `Solo tienes ${puntosDisponibles} puntos disponibles`
+      });
+    }
+
+    // Calcular valor del descuento (1 punto = $100)
+    const valorDescuento = puntos_a_canjear * 100;
+
+    // Generar código único
+    const codigoCanje = `PTS${Date.now().toString(36).toUpperCase()}`;
+
+    // 🔴 USAR 'ACTIVO' EN LUGAR DE 'PENDIENTE'
+    const canjeResult = await pool.query(`
+      INSERT INTO canjes_recompensas 
+      (usuario_id, puntos_usados, codigo_canje, estado, valor_descuento, fecha_expiracion)
+      VALUES ($1, $2, $3, 'ACTIVO', $4, CURRENT_DATE + INTERVAL '30 days')
+      RETURNING *
+    `, [usuarioId, puntos_a_canjear, codigoCanje, valorDescuento]);
+
+    // NO ACTUALIZAR PUNTOS AQUÍ - Solo devolver los puntos que QUEDARÍAN
+    const puntosRestantes = puntosDisponibles - puntos_a_canjear;
+
+    console.log(`🎯 Canje ACTIVO creado: ${puntos_a_canjear} puntos (NO DESCONTADOS AÚN)`);
+
+    res.json({
+      success: true,
+      canje: {
+        codigo: codigoCanje,
+        puntos_canjeados: puntos_a_canjear,
+        valor_descuento: valorDescuento,
+        fecha_expiracion: canjeResult.rows[0].fecha_expiracion,
+        puntos_restantes: puntosRestantes,
+        estado: 'ACTIVO'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error en canje:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al procesar el canje'
+    });
+  }
+});
+
+// 🆕 NUEVO ENDPOINT: Cancelar canje activo
+app.post('/api/puntos/cancelar-canje', authenticateToken, async (req, res) => {
+  const { codigo_canje } = req.body;
+  const usuarioId = req.user.userId;
+
+  try {
+    // Buscar y cancelar canje activo
+    const canjeResult = await pool.query(`
+      UPDATE canjes_recompensas 
+      SET estado = 'EXPIRADO' 
+      WHERE codigo_canje = $1 
+      AND usuario_id = $2 
+      AND estado = 'ACTIVO'
+      RETURNING *
+    `, [codigo_canje, usuarioId]);
+
+    if (canjeResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Canje no encontrado o ya fue usado'
+      });
+    }
+
+    console.log(`🔄 Canje ${codigo_canje} cancelado (marcado como EXPIRADO)`);
+
+    res.json({
+      success: true,
+      message: 'Canje cancelado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ Error cancelando canje:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al cancelar el canje'
+    });
+  }
+});
+
+// 🆕 NUEVO ENDPOINT: Cancelar canje pendiente
+app.post('/api/puntos/cancelar-canje', authenticateToken, async (req, res) => {
+  const { codigo_canje } = req.body;
+  const usuarioId = req.user.userId;
+
+  try {
+    // Buscar canje pendiente
+    const canjeResult = await pool.query(`
+      UPDATE canjes_recompensas 
+      SET estado = 'CANCELADO' 
+      WHERE codigo_canje = $1 
+      AND usuario_id = $2 
+      AND estado = 'PENDIENTE'
+      RETURNING *
+    `, [codigo_canje, usuarioId]);
+
+    if (canjeResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Canje no encontrado o ya fue usado'
+      });
+    }
+
+    console.log(`🔄 Canje ${codigo_canje} cancelado`);
+
+    res.json({
+      success: true,
+      message: 'Canje cancelado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ Error cancelando canje:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al cancelar el canje'
+    });
+  }
+});
+// 🎯 ENDPOINT: Obtener canjes activos del usuario
+app.get('/api/puntos/mis-canjes', authenticateToken, async (req, res) => {
+  try {
+    const canjes = await pool.query(`
+      SELECT codigo_canje, puntos_usados, valor_descuento, estado, fecha_expiracion
+      FROM canjes_recompensas
+      WHERE usuario_id = $1 AND estado = 'ACTIVO'
+      ORDER BY fecha_canje DESC
+    `, [req.user.userId]);
+
+    res.json({
+      success: true,
+      canjes: canjes.rows
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo canjes:', error);
+    res.status(500).json({ success: false });
+  }
+});
+
+// 📜 Obtener historial de puntos
+app.get('/api/puntos/historial', authenticateToken, async (req, res) => {
+  try {
+    const { limite = 20, offset = 0 } = req.query;
+    
+    const result = await pool.query(`
+      SELECT 
+        tp.*,
+        p.id as numero_pedido
+      FROM transacciones_puntos tp
+      LEFT JOIN pedidos p ON tp.pedido_id = p.id
+      WHERE tp.usuario_id = $1
+      ORDER BY tp.fecha DESC
+      LIMIT $2 OFFSET $3
+    `, [req.user.userId, limite, offset]);
+    
+    res.json(result.rows);
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo historial:', error);
+    res.status(500).json({ error: 'Error obteniendo historial' });
+  }
+});
+
+// 🎁 Obtener catálogo de recompensas
+app.get('/api/puntos/recompensas', authenticateToken, async (req, res) => {
+  try {
+    const { categoria } = req.query;
+    
+    // Obtener nivel del usuario
+    const nivelResult = await pool.query(
+      'SELECT nivel FROM programa_puntos WHERE usuario_id = $1',
+      [req.user.userId]
+    );
+    
+    const nivelUsuario = nivelResult.rows[0]?.nivel || 'BRONCE';
+    
+    // Obtener orden del nivel
+    const ordenResult = await pool.query(
+      'SELECT orden FROM niveles_programa WHERE nombre = $1',
+      [nivelUsuario]
+    );
+    
+    const ordenNivel = ordenResult.rows[0]?.orden || 1;
+    
+    let query = `
+      SELECT 
+        r.*,
+        np.orden as nivel_orden_requerido,
+        CASE 
+          WHEN np.orden <= $1 THEN true 
+          ELSE false 
+        END as disponible_para_usuario
+      FROM recompensas r
+      LEFT JOIN niveles_programa np ON r.nivel_minimo = np.nombre
+      WHERE r.activo = true
+      AND (r.fecha_fin IS NULL OR r.fecha_fin > NOW())
+      AND (r.stock IS NULL OR r.stock_usado < r.stock)
+    `;
+    
+    const params = [ordenNivel];
+    
+    if (categoria && categoria !== 'todos') {
+      query += ' AND r.categoria = $2';
+      params.push(categoria);
+    }
+    
+    query += ' ORDER BY r.puntos_requeridos ASC';
+    
+    const result = await pool.query(query, params);
+    
+    res.json(result.rows);
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo recompensas:', error);
+    res.status(500).json({ error: 'Error obteniendo recompensas' });
+  }
+});
+
+// 🎁 Canjear recompensa
+app.post('/api/puntos/canjear/:recompensaId', authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    const { recompensaId } = req.params;
+    
+    await client.query('BEGIN');
+    
+    // Verificar recompensa
+    const recompensaResult = await client.query(
+      'SELECT * FROM recompensas WHERE id = $1 AND activo = true FOR UPDATE',
+      [recompensaId]
+    );
+    
+    if (recompensaResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Recompensa no encontrada' });
+    }
+    
+    const recompensa = recompensaResult.rows[0];
+    
+    // Verificar stock
+    if (recompensa.stock !== null && recompensa.stock_usado >= recompensa.stock) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Recompensa agotada' });
+    }
+    
+    // Verificar puntos del usuario
+    const puntosResult = await client.query(
+      'SELECT puntos_disponibles, nivel FROM programa_puntos WHERE usuario_id = $1 FOR UPDATE',
+      [req.user.userId]
+    );
+    
+    if (puntosResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Usuario sin programa de puntos' });
+    }
+    
+    const { puntos_disponibles, nivel } = puntosResult.rows[0];
+    
+    if (puntos_disponibles < recompensa.puntos_requeridos) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        error: 'Puntos insuficientes',
+        puntos_disponibles,
+        puntos_requeridos: recompensa.puntos_requeridos
+      });
+    }
+    
+    // Verificar nivel mínimo
+    const nivelOrdenResult = await client.query(`
+      SELECT 
+        (SELECT orden FROM niveles_programa WHERE nombre = $1) as nivel_usuario,
+        (SELECT orden FROM niveles_programa WHERE nombre = $2) as nivel_requerido
+    `, [nivel, recompensa.nivel_minimo]);
+    
+    const { nivel_usuario, nivel_requerido } = nivelOrdenResult.rows[0];
+    
+    if (nivel_usuario < nivel_requerido) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        error: `Esta recompensa requiere nivel ${recompensa.nivel_minimo}` 
+      });
+    }
+    
+    // Generar código único
+    const codigoCanje = `CJ${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const fechaExpiracion = new Date();
+    fechaExpiracion.setDate(fechaExpiracion.getDate() + (recompensa.validez_dias || 30));
+    
+    // Crear canje
+    const canjeResult = await client.query(`
+      INSERT INTO canjes_recompensas 
+      (usuario_id, recompensa_id, puntos_usados, codigo_canje, fecha_expiracion)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id
+    `, [
+      req.user.userId,
+      recompensaId,
+      recompensa.puntos_requeridos,
+      codigoCanje,
+      fechaExpiracion
+    ]);
+    
+    // Descontar puntos
+    await client.query(`
+      UPDATE programa_puntos 
+      SET puntos_disponibles = puntos_disponibles - $1,
+          puntos_canjeados = puntos_canjeados + $1,
+          ultima_actualizacion = CURRENT_TIMESTAMP
+      WHERE usuario_id = $2
+    `, [recompensa.puntos_requeridos, req.user.userId]);
+    
+    // Registrar transacción
+    await client.query(`
+      INSERT INTO transacciones_puntos 
+      (usuario_id, tipo, puntos, descripcion, saldo_anterior, saldo_nuevo)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [
+      req.user.userId,
+      'CANJEADO',
+      -recompensa.puntos_requeridos,
+      `Canje: ${recompensa.nombre}`,
+      puntos_disponibles,
+      puntos_disponibles - recompensa.puntos_requeridos
+    ]);
+    
+    // Actualizar stock de recompensa
+    if (recompensa.stock !== null) {
+      await client.query(
+        'UPDATE recompensas SET stock_usado = stock_usado + 1 WHERE id = $1',
+        [recompensaId]
+      );
+    }
+    
+    await client.query('COMMIT');
+    
+    console.log(`🎁 Recompensa canjeada: ${recompensa.nombre} por usuario ${req.user.userId}`);
+    
+    res.json({
+      success: true,
+      canje: {
+        id: canjeResult.rows[0].id,
+        codigo: codigoCanje,
+        recompensa: recompensa.nombre,
+        tipo: recompensa.tipo,
+        valor: recompensa.valor,
+        expira: fechaExpiracion,
+        puntos_usados: recompensa.puntos_requeridos
+      }
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('❌ Error canjeando recompensa:', error);
+    res.status(500).json({ error: 'Error canjeando recompensa' });
+  } finally {
+    client.release();
+  }
+});
+
+// 🎯 ENDPOINT: Obtener opciones de canje disponibles
+app.get('/api/puntos/opciones-canje', authenticateToken, async (req, res) => {
+  try {
+    // Obtener saldo actual del usuario
+    const saldoResult = await pool.query(
+      'SELECT puntos_disponibles FROM programa_puntos WHERE usuario_id = $1',
+      [req.user.userId]
+    );
+    
+    const puntosDisponibles = saldoResult.rows[0]?.puntos_disponibles || 0;
+    
+    // Definir opciones de canje
+    const opcionesCanje = [
+      { 
+        puntos: 50, 
+        valor: 5000, 
+        descripcion: '$5,000 de descuento',
+        disponible: puntosDisponibles >= 50
+      },
+      { 
+        puntos: 100, 
+        valor: 10000, 
+        descripcion: '$10,000 de descuento',
+        disponible: puntosDisponibles >= 100
+      },
+      { 
+        puntos: 200, 
+        valor: 22000, 
+        descripcion: '$22,000 de descuento (10% extra)',
+        disponible: puntosDisponibles >= 200
+      },
+      { 
+        puntos: 500, 
+        valor: 60000, 
+        descripcion: '$60,000 de descuento (20% extra)',
+        disponible: puntosDisponibles >= 500
+      }
+    ];
+    
+    res.json({
+      success: true,
+      puntos_disponibles: puntosDisponibles,
+      opciones: opcionesCanje
+    });
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo opciones de canje:', error);
+    res.status(500).json({ error: 'Error obteniendo opciones de canje' });
+  }
+});
+
+// 🎫 Obtener mis canjes
+app.get('/api/puntos/mis-canjes', authenticateToken, async (req, res) => {
+  try {
+    const { estado = 'todos' } = req.query;
+    
+    let query = `
+      SELECT 
+        cr.*,
+        r.nombre as recompensa_nombre,
+        r.descripcion as recompensa_descripcion,
+        r.tipo as recompensa_tipo,
+        r.valor as recompensa_valor
+      FROM canjes_recompensas cr
+      JOIN recompensas r ON cr.recompensa_id = r.id
+      WHERE cr.usuario_id = $1
+    `;
+    
+    const params = [req.user.userId];
+    
+    if (estado !== 'todos') {
+      query += ' AND cr.estado = $2';
+      params.push(estado.toUpperCase());
+    }
+    
+    query += ' ORDER BY cr.fecha_canje DESC';
+    
+    const result = await pool.query(query, params);
+    
+    res.json(result.rows);
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo canjes:', error);
+    res.status(500).json({ error: 'Error obteniendo canjes' });
+  }
+});
+
+// ✅ Validar código de canje
+app.post('/api/puntos/validar-canje', authenticateToken, async (req, res) => {
+  try {
+    const { codigo } = req.body;
+    
+    if (!codigo) {
+      return res.status(400).json({ error: 'Código requerido' });
+    }
+    
+    const result = await pool.query(`
+      SELECT 
+        cr.*,
+        r.nombre as recompensa_nombre,
+        r.tipo as recompensa_tipo,
+        r.valor as recompensa_valor
+      FROM canjes_recompensas cr
+      JOIN recompensas r ON cr.recompensa_id = r.id
+      WHERE cr.codigo_canje = $1 
+      AND cr.usuario_id = $2
+    `, [codigo, req.user.userId]);
+    
+    if (result.rows.length === 0) {
+      return res.json({ 
+        valido: false, 
+        error: 'Código no válido o no pertenece a tu cuenta' 
+      });
+    }
+    
+    const canje = result.rows[0];
+    
+    // Verificar estado
+    if (canje.estado === 'USADO') {
+      return res.json({ 
+        valido: false, 
+        error: 'Este código ya fue utilizado' 
+      });
+    }
+    
+    if (canje.estado === 'EXPIRADO' || new Date(canje.fecha_expiracion) < new Date()) {
+      return res.json({ 
+        valido: false, 
+        error: 'Este código ha expirado' 
+      });
+    }
+    
+    res.json({
+      valido: true,
+      canje: {
+        codigo: canje.codigo_canje,
+        recompensa: canje.recompensa_nombre,
+        tipo: canje.recompensa_tipo,
+        valor: canje.recompensa_valor,
+        expira: canje.fecha_expiracion
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error validando canje:', error);
+    res.status(500).json({ error: 'Error validando código' });
+  }
+});
+
+// 🏆 ENDPOINTS ADMIN - Sistema de Puntos
+
+// Dashboard de puntos
+app.get('/api/admin/puntos/dashboard', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const stats = await Promise.all([
+      // Usuarios en programa
+      pool.query('SELECT COUNT(*) as total FROM programa_puntos'),
+      pool.query('SELECT COUNT(*) as activos FROM programa_puntos WHERE puntos_totales > 0'),
+      
+      // Puntos totales
+      pool.query('SELECT SUM(puntos_totales) as emitidos, SUM(puntos_canjeados) as canjeados FROM programa_puntos'),
+      
+      // Distribución por niveles
+      pool.query('SELECT nivel, COUNT(*) as cantidad FROM programa_puntos GROUP BY nivel'),
+      
+      // Recompensas
+      pool.query('SELECT COUNT(*) as total_canjes FROM canjes_recompensas'),
+      pool.query('SELECT COUNT(*) as canjes_mes FROM canjes_recompensas WHERE fecha_canje >= DATE_TRUNC(\'month\', CURRENT_DATE)'),
+      
+      // Top usuarios
+      pool.query(`
+        SELECT 
+          u.nombre,
+          pp.puntos_totales,
+          pp.nivel
+        FROM programa_puntos pp
+        JOIN usuarios u ON pp.usuario_id = u.id
+        ORDER BY pp.puntos_totales DESC
+        LIMIT 10
+      `)
+    ]);
+    
+    res.json({
+      usuarios: {
+        total: parseInt(stats[0].rows[0].total),
+        activos: parseInt(stats[1].rows[0].activos)
+      },
+      puntos: {
+        emitidos: parseInt(stats[2].rows[0].emitidos || 0),
+        canjeados: parseInt(stats[2].rows[0].canjeados || 0),
+        disponibles: parseInt(stats[2].rows[0].emitidos || 0) - parseInt(stats[2].rows[0].canjeados || 0)
+      },
+      niveles: stats[3].rows,
+      canjes: {
+        total: parseInt(stats[4].rows[0].total_canjes),
+        este_mes: parseInt(stats[5].rows[0].canjes_mes)
+      },
+      top_usuarios: stats[6].rows
+    });
+    
+  } catch (error) {
+    console.error('❌ Error dashboard puntos:', error);
+    res.status(500).json({ error: 'Error obteniendo dashboard' });
+  }
+});
+
+// Otorgar puntos manual
+app.post('/api/admin/puntos/otorgar', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { usuario_id, puntos, descripcion } = req.body;
+    
+    if (!usuario_id || !puntos) {
+      return res.status(400).json({ error: 'Usuario y puntos requeridos' });
+    }
+    
+    const resultado = await asignarPuntosUsuario(
+      usuario_id,
+      null,
+      puntos,
+      descripcion || 'Puntos otorgados por administrador'
+    );
+    
+    if (resultado) {
+      console.log(`✅ Admin otorgó ${puntos} puntos a usuario ${usuario_id}`);
+      res.json({ 
+        success: true, 
+        message: `${puntos} puntos otorgados exitosamente` 
+      });
+    } else {
+      res.status(400).json({ error: 'Error otorgando puntos' });
+    }
+    
+  } catch (error) {
+    console.error('❌ Error otorgando puntos:', error);
+    res.status(500).json({ error: 'Error otorgando puntos' });
+  }
+});
+
+// ✅ FIN DEL SISTEMA DE PUNTOS
 
 // ===================
 // 🛍️ RUTAS DE PEDIDOS
@@ -4248,6 +5899,27 @@ app.get('/test-whatsapp-libre', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Error mensaje libre:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ENDPOINT TEMPORAL PARA PROBAR (BORRAR DESPUÉS)
+app.get('/test-margenes', async (req, res) => {
+  try {
+    const productos = await pool.query('SELECT COUNT(*) as total FROM productos');
+    const gastos = await pool.query('SELECT COUNT(*) as total FROM gastos_operativos');
+    
+    res.json({
+      test: 'Sistema de márgenes funcionando',
+      productos_total: productos.rows[0].total,
+      gastos_total: gastos.rows[0].total,
+      endpoints_disponibles: [
+        '/api/admin/rentabilidad/dashboard',
+        '/api/admin/productos/margenes',
+        '/api/admin/gastos'
+      ]
+    });
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
