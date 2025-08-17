@@ -38,6 +38,19 @@ pool.query(`
 `).then(() => console.log("✅ Tabla 'usuarios' lista"))
   .catch(err => console.error("❌ Error creando tabla usuarios:", err));
 
+  // FORZAR CREACIÓN DE CAMPOS QUE FALTAN
+setTimeout(async () => {
+  try {
+    await pool.query(`
+      ALTER TABLE pedidos
+      ADD COLUMN IF NOT EXISTS codigo_promocional VARCHAR(50)
+    `);
+    console.log("✅✅✅ Campo codigo_promocional agregado FORZADAMENTE");
+  } catch (err) {
+    console.log("❌ Error agregando codigo_promocional:", err.message);
+  }
+}, 3000); // Esperar 3 segundos para que todo esté listo
+
 // ✅ Crear tabla product
 pool.query(`
   CREATE TABLE IF NOT EXISTS productos (
@@ -1224,7 +1237,7 @@ app.post('/orders', authenticateToken, async (req, res) => {
         const codigoData = codigoResult.rows[0];
         const descuento = parseFloat(codigoData.descuento_porcentaje);
         const descuentoMonto = Math.round(totalFinal * (descuento / 100));
-        totalFinal = totalFinal - descuentoMonto;
+        //totalFinal = totalFinal - descuentoMonto;
         console.log(`✅ Descuento aplicado: ${descuento}% = $${descuentoMonto}`);
       }
     }
@@ -1363,23 +1376,29 @@ let canjeAplicado = null; // Variable para guardar el canje aplicado
       INSERT INTO pedidos (
         usuario_id, productos, total, torre_entrega, piso_entrega, apartamento_entrega,
         instrucciones_entrega, telefono_contacto, payment_reference, payment_status,
-        payment_method, payment_transaction_id, payment_amount_cents
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        payment_method, payment_transaction_id, payment_amount_cents,
+        codigo_promocional, codigo_canje, subtotal, descuento_monto, costo_envio
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       RETURNING id
     `, [
-      req.user.userId,
-      JSON.stringify(productosCompletos), // Incluye productos individuales y paquetes
-      totalFinal,
-      torre_entrega,
-      piso_entrega,
-      apartamento_entrega,
-      instrucciones_entrega || '',
-      telefono_contacto,
-      payment_reference,
-      payment_status,
-      payment_method,
-      payment_transaction_id,
-      payment_amount_cents
+      req.user.userId,                      // $1
+      JSON.stringify(productosCompletos),   // $2
+      totalFinal,                           // $3
+      torre_entrega,                        // $4
+      piso_entrega,                         // $5
+      apartamento_entrega,                  // $6
+      instrucciones_entrega || '',          // $7
+      telefono_contacto,                    // $8
+      payment_reference,                    // $9
+      payment_status,                       // $10
+      payment_method,                       // $11
+      payment_transaction_id,               // $12
+      payment_amount_cents,                 // $13
+      req.body.codigo_promocional || null,  // $14
+      req.body.codigo_canje || null,        // $15
+      totalFinal,                           // $16 - subtotal
+      0,                                     // $17 - descuento_monto
+      0                                      // $18 - costo_envio
     ]);
 
     // Marcar código promocional como usado (mantener tu lógica)
@@ -3034,13 +3053,23 @@ app.get('/api/admin/pedidos', authenticateToken, requireAdmin, async (req, res) 
 
     let query = `
       SELECT
-        p.*, 
+        p.*,
         u.nombre as usuario_nombre,
         u.email as usuario_email,
         u.telefono as usuario_telefono,
-        CONCAT('Torre ', p.torre_entrega, ', Piso ', p.piso_entrega, ', Apt ', p.apartamento_entrega) as direccion_completa
+        CONCAT('Torre ', p.torre_entrega, ', Piso ', p.piso_entrega, ', Apt ', p.apartamento_entrega) as direccion_completa,
+        -- Información de descuentos
+        p.descuento_monto,
+        p.descuento_porcentaje,
+        p.codigo_promocional,
+        p.codigo_canje,
+        p.costo_envio,
+        p.subtotal,
+        -- Si hay canje, obtener el valor del descuento
+        cr.valor_descuento as descuento_canje
       FROM pedidos p
       LEFT JOIN usuarios u ON p.usuario_id = u.id
+      LEFT JOIN canjes_recompensas cr ON cr.codigo_canje = p.codigo_canje
     `;
 
     const params = [];
@@ -3127,6 +3156,61 @@ try {
         codigosPorPedido[row.pedido_id] = row.codigo;
       }
     });
+    
+    // AGREGAR INFORMACIÓN DE CANJES
+    try {
+      // Obtener información de canjes para todos los pedidos
+      const canjesResult = await pool.query(`
+        SELECT 
+          p.id as pedido_id,
+          cr.codigo_canje,
+          cr.puntos_usados,
+          CASE 
+            WHEN cr.puntos_usados >= 500 THEN 6000
+            WHEN cr.puntos_usados >= 200 THEN 2200
+            WHEN cr.puntos_usados >= 100 THEN 1000
+            WHEN cr.puntos_usados >= 50 THEN 500
+            ELSE 0
+          END as valor_descuento
+        FROM pedidos p
+        JOIN canjes_recompensas cr ON cr.pedido_id = p.id
+        WHERE p.id = ANY($1)
+      `, [pedidoIds]);
+      
+      // Asignar descuentos de canje a cada pedido
+      const canjesPorPedido = {};
+      canjesResult.rows.forEach(row => {
+        canjesPorPedido[row.pedido_id] = {
+          codigo_canje: row.codigo_canje,
+          descuento_canje: row.valor_descuento
+        };
+      });
+      
+      // Agregar información de canje a cada pedido
+      pedidosConDesglose.forEach(pedido => {
+        const canje = canjesPorPedido[pedido.id];
+        if (canje) {
+          pedido.codigo_canje = canje.codigo_canje;
+          pedido.descuento_canje = canje.descuento_canje;
+        } else {
+          pedido.descuento_canje = 0;
+        }
+        
+        // Calcular descuento de cupón si hay código promocional
+        if (pedido.codigo_promocional) {
+          const subtotal = pedido.productos?.reduce((acc, p) => 
+            acc + (p.precio * p.cantidad), 0) || 0;
+          // Asumir 10% de descuento por defecto (puedes ajustar)
+          pedido.descuento_cupon = Math.floor(subtotal * 0.1);
+        } else {
+          pedido.descuento_cupon = 0;
+        }
+      });
+      
+    } catch (canjeError) {
+      console.error('Error obteniendo información de canjes:', canjeError);
+    }
+    // FIN DE AGREGAR INFORMACIÓN DE CANJES
 
     // Asignar solo el nombre del código
     pedidosConDesglose.forEach(pedido => {
@@ -3348,23 +3432,29 @@ app.post('/webhook/wompi', express.json(), async (req, res) => {
     usuario_id, productos, total, 
     torre_entrega, piso_entrega, apartamento_entrega,
     telefono_contacto, payment_reference, payment_status,
-    payment_method, payment_transaction_id, payment_amount_cents, estado
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
+    payment_method, payment_transaction_id, payment_amount_cents, estado,
+    codigo_promocional, codigo_canje, subtotal, descuento_monto, costo_envio
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
   RETURNING id`,
   [
   usuario.id,
   JSON.stringify(productosReales),
   transaction.amount_in_cents / 100,
-  datosEntrega.torre_entrega || usuario.torre || '1',        // ✅ CAMBIO
-  parseInt(datosEntrega.piso_entrega || usuario.piso) || 1,  // ✅ CAMBIO
-  datosEntrega.apartamento_entrega || usuario.apartamento || '101', // ✅ CAMBIO
-  datosEntrega.telefono_contacto || usuario.telefono,       // ✅ CAMBIO PRINCIPAL
+  datosEntrega.torre_entrega || usuario.torre || '1',
+  parseInt(datosEntrega.piso_entrega || usuario.piso) || 1,
+  datosEntrega.apartamento_entrega || usuario.apartamento || '101',
+  datosEntrega.telefono_contacto || usuario.telefono,
   reference,
   'APPROVED',
   paymentMethod,
   transactionId,
   transaction.amount_in_cents,
-  'pendiente'
+  'pendiente',
+  null,                                   // $14 - codigo_promocional
+  null,                                   // $15 - codigo_canje
+  transaction.amount_in_cents / 100,      // $16 - subtotal
+  0,                                       // $17 - descuento_monto
+  0                                        // $18 - costo_envio
 ]
 );
 
@@ -5359,6 +5449,18 @@ app.delete('/api/admin/codigos-promocionales/eliminar', authenticateToken, requi
   } catch (error) {
     console.error('❌ Error eliminando códigos:', error);
     res.status(500).json({ error: 'Error eliminando códigos' });
+    // Agregar campo codigo_canje a tabla pedidos
+pool.query(`
+  ALTER TABLE pedidos
+  ADD COLUMN IF NOT EXISTS codigo_canje VARCHAR(50)
+`).then(() => console.log("✅ Campo codigo_canje agregado a pedidos"))
+  .catch(err => console.log("ℹ️ Campo codigo_canje ya existe:", err.message));
+  // Agregar campo codigo_promocional a pedidos
+pool.query(`
+  ALTER TABLE pedidos
+  ADD COLUMN IF NOT EXISTS codigo_promocional VARCHAR(50)
+`).then(() => console.log("✅ Campo codigo_promocional agregado a pedidos"))
+  .catch(err => console.log("ℹ️ Campo codigo_promocional ya existe:", err.message));
   }
 });
 
@@ -5414,6 +5516,15 @@ pool.query(`
   ADD COLUMN IF NOT EXISTS whatsapp_delivered_at TIMESTAMP
 `).then(() => console.log("✅ Campos WhatsApp agregados a tabla pedidos"))
   .catch(err => console.log("ℹ️ Campos WhatsApp ya existen:", err.message));
+  // Agregar campos de descuento a tabla pedidos
+pool.query(`
+  ALTER TABLE pedidos
+  ADD COLUMN IF NOT EXISTS subtotal INTEGER,
+  ADD COLUMN IF NOT EXISTS descuento_monto INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS descuento_porcentaje DECIMAL(5,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS costo_envio INTEGER DEFAULT 0
+`).then(() => console.log("✅ Campos de descuento agregados a pedidos"))
+  .catch(err => console.log("ℹ️ Campos de descuento ya existen:", err.message));
 
 // ✅ Crear tabla logs WhatsApp
 pool.query(`
