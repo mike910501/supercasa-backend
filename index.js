@@ -1231,51 +1231,7 @@ app.post('/orders', authenticateToken, async (req, res) => {
 
     // 🎁 SISTEMA DE PUNTOS - Aplicar canje si existe
 let canjeAplicado = null; // Variable para guardar el canje aplicado
-if (req.body.codigo_canje) {
-  console.log(`🎁 Aplicando canje de puntos: ${req.body.codigo_canje}`);
-  
-  const canjeResult = await pool.query(`
-    SELECT 
-      cr.*, 
-      r.tipo, 
-      r.valor,
-      r.nombre as recompensa_nombre
-    FROM canjes_recompensas cr
-    JOIN recompensas r ON cr.recompensa_id = r.id
-    WHERE cr.codigo_canje = $1 
-    AND cr.usuario_id = $2 
-    AND cr.estado = 'ACTIVO'
-    AND (cr.fecha_expiracion IS NULL OR cr.fecha_expiracion > NOW())
-  `, [req.body.codigo_canje.trim(), req.user.userId]);
-  
-  if (canjeResult.rows.length > 0) {
-    const canje = canjeResult.rows[0];
-    canjeAplicado = canje; // Guardar para usar después
-    
-    // Aplicar descuento según tipo
-    if (canje.tipo === 'DESCUENTO_PORCENTAJE') {
-      const descuentoMonto = Math.round(totalFinal * (canje.valor / 100));
-      totalFinal = totalFinal - descuentoMonto;
-      console.log(`✅ Descuento por puntos aplicado: ${canje.valor}% = $${descuentoMonto}`);
-      
-    } else if (canje.tipo === 'DESCUENTO_MONTO') {
-      const descuentoAplicar = Math.min(canje.valor, totalFinal); // No dejar total negativo
-      totalFinal = totalFinal - descuentoAplicar;
-      console.log(`✅ Descuento por puntos aplicado: $${descuentoAplicar}`);
-      
-    } else if (canje.tipo === 'ENVIO_GRATIS') {
-      // Si tienes costo de envío en el total, restarlo aquí
-      console.log(`✅ Envío gratis aplicado por canje de puntos`);
-      // totalFinal = totalFinal - costoEnvio; // Si manejas envío separado
-      
-    } else if (canje.tipo === 'PRODUCTO_GRATIS') {
-      // Lógica para producto gratis (si lo implementas)
-      console.log(`✅ Producto gratis por canje: ${canje.recompensa_nombre}`);
-    }
-  } else {
-    console.log(`⚠️ Código de canje no válido o expirado: ${req.body.codigo_canje}`);
-  }
-}
+
 
     // ✅ VERIFICAR STOCK (productos individuales + paquetes)
     console.log('🔍 Verificando stock de productos y paquetes...');
@@ -1442,29 +1398,39 @@ if (req.body.codigo_canje) {
 
 const pedidoId = result.rows[0].id;
 
+let canjeInfo = null; 
+
 // 🎯 APLICAR CANJE DE PUNTOS SI EXISTE
 if (codigo_canje) {
-  // Primero marcar el canje como USADO
-  await pool.query(`
-    UPDATE canjes_recompensas 
-    SET estado = 'USADO', 
-        fecha_uso = CURRENT_TIMESTAMP,
-        pedido_id = $1
-    WHERE codigo_canje = $2 AND usuario_id = $3
-  `, [pedidoId, codigo_canje, req.user.userId]);
-  
-
+  // PRIMERO: Verificar que el canje existe y es válido
+  const canjeInfo = await pool.query(`
+    SELECT * FROM canjes_recompensas 
+    WHERE codigo_canje = $1 
+    AND usuario_id = $2 
+    AND estado = 'ACTIVO'
+    AND fecha_expiracion > NOW()
+  `, [codigo_canje, req.user.userId]);
   
   if (canjeInfo.rows.length > 0) {
     const puntosUsados = canjeInfo.rows[0].puntos_usados;
     
+    // AHORA SÍ: Marcar el canje como USADO
     await pool.query(`
-      UPDATE programa_puntos 
-      SET puntos_disponibles = puntos_disponibles - $1,
-          puntos_canjeados = puntos_canjeados + $1,
-          ultima_actualizacion = CURRENT_TIMESTAMP
-      WHERE usuario_id = $2
-    `, [puntosUsados, req.user.userId]);
+      UPDATE canjes_recompensas 
+      SET estado = 'USADO', 
+          fecha_uso = CURRENT_TIMESTAMP,
+          pedido_id = $1
+      WHERE codigo_canje = $2 AND usuario_id = $3
+    `, [pedidoId, codigo_canje, req.user.userId]);
+    
+    // Actualizar puntos del usuario
+    //await pool.query(`
+      //UPDATE programa_puntos 
+     // SET puntos_disponibles = puntos_disponibles - $1,
+       //   puntos_canjeados = puntos_canjeados + $1,
+         // ultima_actualizacion = CURRENT_TIMESTAMP
+      //WHERE usuario_id = $2
+    //`, [puntosUsados, req.user.userId]);
     
     // Registrar transacción de puntos
     await pool.query(`
@@ -1478,7 +1444,21 @@ if (codigo_canje) {
       pedidoId
     ]);
     
+    // AGREGAR ESTAS LÍNEAS - Actualizar puntos del usuario
+    await pool.query(`
+      UPDATE programa_puntos
+      SET puntos_disponibles = puntos_disponibles - $1,
+          puntos_canjeados = puntos_canjeados + $1,
+          ultima_actualizacion = CURRENT_TIMESTAMP
+      WHERE usuario_id = $2
+    `, [puntosUsados, req.user.userId]);
+    // FIN DE LO QUE AGREGAR
+
     console.log(`✅ Canje ${codigo_canje} aplicado y ${puntosUsados} puntos descontados`);
+    
+    console.log(`✅ Canje ${codigo_canje} aplicado y ${puntosUsados} puntos descontados`);
+  } else {
+    console.log(`⚠️ Código de canje no válido o ya usado: ${codigo_canje}`);
   }
 }
 // Marcar canje de puntos como usado si se aplicó
@@ -1497,12 +1477,16 @@ console.log(`✅ Pedido creado: SUP-${pedidoId} con productos y paquetes`);
 
 // 🏆 SISTEMA DE PUNTOS - Calcular y asignar puntos
 try {
-  const puntosGanados = await calcularPuntosParaPedido(
-    { id: pedidoId, total: totalFinal },
-    req.user.userId
-  );
-  
-  if (puntosGanados > 0) {
+  // NO ganar puntos si se usó un canje
+  if (req.body.codigo_canje) {
+    console.log('❌ No se ganan puntos al usar canje');
+  } else {
+    const puntosGanados = await calcularPuntosParaPedido(
+      { id: pedidoId, total: totalFinal },
+      req.user.userId
+    );
+    
+    if (puntosGanados > 0) {
     await asignarPuntosUsuario(
       req.user.userId,
       pedidoId,
@@ -1510,6 +1494,7 @@ try {
       `Compra #SUP-${pedidoId}`
     );
     console.log(`🏆 ${puntosGanados} puntos asignados por pedido SUP-${pedidoId}`);
+  }
   }
 } catch (puntosError) {
   console.error('❌ Error en sistema de puntos (no crítico):', puntosError);
@@ -2158,7 +2143,7 @@ app.post('/api/puntos/canjear', authenticateToken, async (req, res) => {
     }
 
     // ✅ CORRECCIÓN: Calcular valor del descuento (1 punto = $100)
-    const valorDescuento = puntos_a_canjear * 100; // ← AQUÍ ESTABA EL ERROR
+    const valorDescuento = puntos_a_canjear * 10; // ✅ NUEVO: 1 punto = $10
 
     // Generar código único
     const codigoCanje = `PTS${Date.now().toString(36).toUpperCase()}`;
@@ -2459,14 +2444,7 @@ app.post('/api/puntos/canjear/:recompensaId', authenticateToken, async (req, res
       fechaExpiracion
     ]);
     
-    // Descontar puntos
-    await client.query(`
-      UPDATE programa_puntos 
-      SET puntos_disponibles = puntos_disponibles - $1,
-          puntos_canjeados = puntos_canjeados + $1,
-          ultima_actualizacion = CURRENT_TIMESTAMP
-      WHERE usuario_id = $2
-    `, [recompensa.puntos_requeridos, req.user.userId]);
+   
     
     // Registrar transacción
     await client.query(`
@@ -2488,9 +2466,20 @@ app.post('/api/puntos/canjear/:recompensaId', authenticateToken, async (req, res
         'UPDATE recompensas SET stock_usado = stock_usado + 1 WHERE id = $1',
         [recompensaId]
       );
+      
     }
+    await client.query(`
+      UPDATE programa_puntos
+      SET puntos_disponibles = puntos_disponibles - $1,
+          puntos_canjeados = puntos_canjeados + $1,
+          ultima_actualizacion = CURRENT_TIMESTAMP
+      WHERE usuario_id = $2
+    `, [recompensa.puntos_requeridos, req.user.userId]);
+    
+    console.log(`✅ Descontados ${recompensa.puntos_requeridos} puntos del usuario ${req.user.userId}`);
     
     await client.query('COMMIT');
+    
     
     console.log(`🎁 Recompensa canjeada: ${recompensa.nombre} por usuario ${req.user.userId}`);
     
